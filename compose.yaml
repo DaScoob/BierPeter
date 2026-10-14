@@ -1,0 +1,17 @@
+services:
+  bierpeter:
+    build: .
+    container_name: pompui-bierpeter-alpha
+    ports:
+      - "127.0.0.1:6018:8080"
+    volumes:
+      - bierpeter-data:/data
+    environment:
+      BIERPETER_SECURE_COOKIE: "0"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+volumes:
+  bierpeter-data:

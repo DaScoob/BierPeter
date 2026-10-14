@@ -1,0 +1,17 @@
+# Integration template, used from the POMPUI project root.
+# No host ports: public traffic is routed through global-proxy.
+services:
+  pompui-bierpeter:
+    build: ./repos/BierPeter
+    container_name: pompui-bierpeter
+    environment:
+      BIERPETER_SECURE_COOKIE: "1"
+    volumes:
+      - bierpeter-data:/data
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [pompui-network, web-network]
+    restart: unless-stopped
+volumes:
+  bierpeter-data:
+# Networks are supplied by POMPUI's existing compose configuration.

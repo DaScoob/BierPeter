@@ -1,0 +1,7 @@
+.git
+.env
+secrets
+data
+tests
+__pycache__
+*.bundle
