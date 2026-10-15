@@ -23,7 +23,7 @@ class Client:
         try:
             with self.opener.open(r) as response: return response.status,json.load(response)
         except urllib.error.HTTPError as e: return e.code,json.load(e)
-class Tests(unittest.TestCase):
+class Fixture(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory()
         app.DB=Path(self.tmp.name)/'db.sqlite3';app.AUTH_ATTEMPTS.clear();app.init()
@@ -45,6 +45,7 @@ class Tests(unittest.TestCase):
         self.h.call(self.sp+'/device',{'device':'BP-01'})
         self.h.call(self.sp+'/race',{'mode':'relay','title':'Race','policy':policy})
         return self.h.call(self.sp)[1]['races'][-1]['id']
+class Tests(Fixture):
     def test_login_logout(self):
         self.g.call('/logout',{});self.assertEqual(self.g.call('/me')[0],401)
         self.assertEqual(self.g.call('/login',{'name':'Guest','password':'wrong'})[0],401)
@@ -54,7 +55,8 @@ class Tests(unittest.TestCase):
         self.assertEqual(self.o.call('/register',{'name':'X','password':'short'})[0],400)
     def test_access(self):
         self.assertEqual(self.g.call(self.sp)[0],403);self.accept(self.g,self.uid)
-        self.assertEqual(self.g.call(self.sp+'/device',{'device':'x'})[0],403)
+        self.assertEqual(self.g.call(self.sp+'/device',{'device':'x'})[0],200)
+        self.assertEqual(self.g.call(self.sp+'/race',{'mode':'duel','title':'x','policy':'host'})[0],403)
     def test_persistence_multiple_races(self):
         self.accept(self.g,self.uid);self.race()
         self.h.call(self.sp+'/race',{'mode':'training','title':'Second','policy':'host'});app.init()
@@ -78,7 +80,7 @@ class Tests(unittest.TestCase):
         self.g.call('/slot',{'race':rid,'device':'BP-01','side':0,'user':self.uid})
         self.h.call(self.sp+'/member',{'user':self.uid,'status':'removed'})
         self.assertEqual(self.h.call(self.sp)[1]['races'][0]['slots'],[])
-        self.assertEqual(self.g.call(self.sp)[0],403)
+        self.assertEqual(self.g.call(self.sp)[1]['membership'],'removed')
     def test_expiration(self):
         self.g.call('/join',{'code':self.code})
         with app.connect() as c:c.execute('UPDATE members SET expires=0 WHERE user=?',(self.uid,))

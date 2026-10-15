@@ -3,11 +3,12 @@ services:
     build: .
     container_name: pompui-bierpeter-alpha
     ports:
-      - "127.0.0.1:6018:8080"
+      - "${BIERPETER_BIND:-0.0.0.0}:6017:8080"
     volumes:
       - bierpeter-data:/data
     environment:
       BIERPETER_SECURE_COOKIE: "0"
+      DEVICE_API_KEY: "${DEVICE_API_KEY:-}"
     cap_drop:
       - ALL
     security_opt:

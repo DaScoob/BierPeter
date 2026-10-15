@@ -1,7 +1,10 @@
 # BierPeter
 
 - BierPeter is the product. Race Test is only the temporary hardware test environment.
-- Preserve the approved mobile concept, compact device strip, bottom navigation and left/right device cards.
+- Preserve the approved mobile visual concept and left/right cards. Use one shared lobby with guided preparation; do not separate participant/device administration into tabs.
+- Preserve device and invitation link context through authentication and reload.
+- Existing accounts and sessions must survive schema additions and updates.
+- Use host port 6017. Heartbeat online status is not sensor readiness or proof of an active peer connection.
 - Session = player group; Race/Run = one round. Sessions contain multiple races.
 - Device identification is not proof of ownership or connectivity.
 - No fictitious hardware status or events in the running application.
