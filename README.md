@@ -1,6 +1,30 @@
-# BierPeter · Alpha 0.2
+# BierPeter · Alpha 0.2.1
 
 Lokale Web-App mit gemeinsamer Session-Lobby, kontexterhaltenden Geräte-/Einladungslinks und einer Anbindung an das vorhandene ESP-Testfirmware-Protokoll.
+
+## Neu in 0.2.1
+
+- Gemeinsames aktives Race für die gesamte Lobby, auch nach Neuladen.
+- Geräte aus Sessions entfernen und Reihenfolge/Startgerät festlegen.
+- Race-Entwürfe bearbeiten oder löschen; Moduswechsel setzt nur die betreffende Aufstellung zurück.
+- Serverseitig begrenzte Spieleranzahl für Eins-gegen-eins und Training.
+- Anzeige Online/Offline, Serververbindung und ESP-NOW-Pairingzustand getrennt.
+- Kontobereich: eigene Gerätemerkliste, private Namen und editierbares Statistik-Dashboard.
+- Private Gerätenamen und Dashboard-Einstellungen im Browser mit AES-256-GCM verschlüsselt; Wiederherstellungsschlüssel bleibt beim Nutzer.
+- Erneute Beitrittsanfrage aus der wartenden/entfernten Lobby ohne Suche nach dem alten Einladungslink.
+- LAN-Einladungsadresse über die Lobby oder die lokale `.env` konfigurierbar.
+
+**Sicherheitsgrenze:** Der private Speicher ist ein Prototyp. Benutzernamen und gemeinsame Lobby-Daten verwenden weiterhin das bisherige Klartextmodell. Private Gerätenamen werden noch nicht verschlüsselt mit Mitspielern geteilt. Getrennte Account-/Race-Dienste sind unter `security/` ausführbar, aber noch nicht an die laufende Lobby angeschlossen. Die Alpha ist nicht als vollständig Ende-zu-Ende-verschlüsseltes Produkt freigegeben.
+
+## Private Daten und Dashboard
+
+Unter Konto zuerst den privaten Bereich einrichten: Schlüssel erzeugen, Schlüsseldatei herunterladen und privat aufbewahren, dann den Bereich anlegen. Nach Neuladen oder auf einem anderen Gerät wird diese Schlüsseldatei zum Entsperren benötigt. Ein Passwort-Reset kann den Inhalt nicht entschlüsseln. Es wird keine Kopie des Schlüssels auf dem Server gespeichert.
+
+Eine persönliche Geräteverwaltung ist unabhängig von der Session. Entfernen aus der Session löscht keine Konto-Merkliste; Entfernen aus dem Konto verändert keine Session. Eine Merkliste beweist kein Eigentum. Private Gerätenamen werden im eigenen Browser nach Entsperren auch in der Lobby angezeigt; andere Teilnehmer erhalten bis zur sicheren Gruppenfreigabe weiterhin die Gerätekennung.
+
+Dashboard-Widgets: Überblick, Ergebnistabelle, Zeitverlauf und Spielmodi. Im Bearbeitungsmodus sind Sichtbarkeit und Reihenfolge änderbar; die Einstellungen werden verschlüsselt gespeichert. Ohne abgeschlossene, gewertete Races bleiben Statistiken leer. Es werden keine Ergebnisse erfunden. Ergebnisanbindung und Portabilität folgen später.
+
+WebCrypto benötigt HTTPS oder localhost. Für HTTP-Zugriff über eine LAN-IP steht der private Speicher im Browser deshalb nicht zur Verfügung; die Lobby bleibt erreichbar. Die Schlüssel verbleiben nur im Arbeitsspeicher bis zum Sperren, Neuladen oder Abmelden.
 
 ## Einstieg und Lobby
 
@@ -59,6 +83,7 @@ Python 3.12 und Node.js genügen, keine zusätzlichen Pakete:
 cd ~/BierPeter
 python3 -m unittest discover -s tests -v
 node tests/ui-flow.cjs
+node tests/ui-alpha021.cjs
 node --check web/app.js
 ```
 
@@ -68,11 +93,13 @@ node --check web/app.js
 
 Implementiert: Konten, Sessions, Host-Bestätigung, Einladungs-/Geräte-Kontext, automatische Lobby-Aktualisierung, Aufstellung, persistente Heartbeats, echte Gerätebefehle und Bestätigungen.
 
-Nicht implementiert: neue Spielfirmware, Glasbereitschaft, Race-Start und Ergebniswertung, Trainings-Countdown, Turnierpläne, JSON-Portabilität, Kontowiederherstellung und Kontolöschung. Spielmodi sind als Vorbereitungsentwürfe wählbar. Es gibt keine simulierten Sensorereignisse oder Messzeiten.
+Nicht implementiert: neue Spielfirmware, Glasbereitschaft, Race-Start und Ergebniswertung, Trainings-Countdown, Turnierpläne, JSON-Portabilität, vollständige Account-Wiederherstellung und Kontolöschung. Spielmodi sind als Vorbereitungsentwürfe wählbar. Es gibt keine simulierten Sensorereignisse oder Messzeiten.
 
 Passwort-Hashes: scrypt mit Salt. Login-Tokens: gehasht, serverseitig maximal zwölf Stunden. HttpOnly-Cookie mit SameSite=Strict; bei HTTPS `BIERPETER_SECURE_COOKIE=1` verwenden. Keine externen Ressourcen oder Analyse. Der Standardbibliothek-Server ist eine lokale Entwicklungsfassung. Vor öffentlichem Dienstbetrieb sind Hosting-Härtung, Betreiberangaben, Datenschutz, Lösch-/Exportfunktionen und Lizenz zu vervollständigen.
 
 ## GitHub und POMPUI
+
+Sicherheitsprototyp: `security/README.md` (isolierte Dienste, eigener Testlauf).
 
 Quellstand: https://github.com/DaScoob/BierPeter
 

@@ -1,0 +1,26 @@
+# Isolated evaluation services, not the active Alpha account backend.
+services:
+  account-prototype:
+    build:
+      context: .
+      dockerfile: security/Dockerfile
+    environment:
+      ROLE: account
+    ports: ["127.0.0.1:6019:8090"]
+    volumes: ["account-prototype:/data", "prototype-trust:/trust"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+  race-prototype:
+    build:
+      context: .
+      dockerfile: security/Dockerfile
+    environment:
+      ROLE: race
+    ports: ["127.0.0.1:6020:8090"]
+    volumes: ["race-prototype:/data", "prototype-trust:/trust:ro"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+volumes:
+  account-prototype:
+  race-prototype:
+  prototype-trust:

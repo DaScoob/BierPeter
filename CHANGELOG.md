@@ -1,5 +1,18 @@
 # Änderungen
 
+## 0.2.1-alpha · 2026-10-15
+
+- Gemeinsame aktive Spielrunde, Modusprüfung, Race-Bearbeitung und Löschung.
+- Geräteentfernung und explizite Reihenfolge in der Lobby.
+- Konto-Gerätemerkliste und private, clientseitig verschlüsselte Gerätenamen.
+- Statistik-Dashboard mit verschlüsselt gespeicherter Widget-Anordnung.
+- Online/Offline sowie getrennte Server-/ESP-NOW- und Pairing-Anzeigen.
+- LAN-Einladungsadresse, Geräteübernahme abbrechen, erneute Beitrittsanfrage.
+- Isolierter Account-/Race-Sicherheitsprototyp mit EdDSA-JWT und getrennten Datenbanken.
+- Additive Datenmigration ohne Verlust vorhandener Alpha-Konten und Sessions.
+- Vollständige Gruppenverschlüsselung der bestehenden Lobby bleibt ausstehend.
+
+
 ## 0.2.0-alpha · 2026-10-15
 
 - Gemeinsame Lobby mit sichtbarer Vorbereitungsreihenfolge statt Verwaltungs-Tabs.

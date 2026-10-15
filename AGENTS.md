@@ -14,3 +14,11 @@
 - Every page needs the AI notice. Provider, privacy and licence decisions must be completed before public service operation.
 - Run `python3 -m unittest discover -s tests -v` and `node --check web/app.js` after relevant changes.
 - Repository upload and hosting are performed by the operator using complete console commands.
+
+## Alpha 0.2.1
+- Active race and device ordering are session-wide server state. Do not replace them with per-browser selection or ID sorting.
+- Device account management is a personal list, not global ownership. Do not erase session availability when removing a personal list entry.
+- New private names/dashboard data must be sealed by web/vault.js before upload; recovery keys must never be sent to the server or derived from the server-known login password.
+- Current lobby data is still legacy plaintext. Never claim full E2EE or transparent group-name sharing until the separate security prototype is evaluated and integrated.
+- Statistics must reflect actual scored results only; empty widgets must not be filled with sample results.
+- Validate: node tests/ui-alpha021.cjs; optional security dependencies are separate from the standard app.

@@ -9,6 +9,7 @@ services:
     environment:
       BIERPETER_SECURE_COOKIE: "0"
       DEVICE_API_KEY: "${DEVICE_API_KEY:-}"
+      BIERPETER_PUBLIC_URL: "${BIERPETER_PUBLIC_URL:-}"
     cap_drop:
       - ALL
     security_opt:

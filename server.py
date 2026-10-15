@@ -1,5 +1,6 @@
 """BierPeter alpha: local account and session preparation service."""
 import hashlib
+import base64
 import hmac
 import json
 import os
@@ -18,7 +19,7 @@ DB = Path(os.environ.get('BIERPETER_DB', str(ROOT / 'data/bierpeter.sqlite3')))
 SECURE = os.environ.get('BIERPETER_SECURE_COOKIE', '0') == '1'
 TTL = 12 * 3600
 ONLINE_WINDOW = 15
-VERSION = '0.2.0-alpha'
+VERSION = '0.2.1-alpha'
 AUTH_ATTEMPTS = {}
 AUTH_LOCK = threading.Lock()
 MODES = {'duel', 'relay', 'marathon', 'general', 'olympics', 'training'}
@@ -49,11 +50,63 @@ def init():
         CREATE TABLE IF NOT EXISTS members(session TEXT REFERENCES sessions(id),user TEXT REFERENCES users(id),status TEXT,expires INTEGER,PRIMARY KEY(session,user));
         CREATE TABLE IF NOT EXISTS devices(session TEXT REFERENCES sessions(id),id TEXT,PRIMARY KEY(session,id));
         CREATE TABLE IF NOT EXISTS races(id TEXT PRIMARY KEY,session TEXT REFERENCES sessions(id),mode TEXT,policy TEXT,title TEXT,state TEXT DEFAULT 'draft');
+        CREATE TABLE IF NOT EXISTS managed_devices(user TEXT REFERENCES users(id),device TEXT,PRIMARY KEY(user,device));
+        CREATE TABLE IF NOT EXISTS private_vaults(user TEXT PRIMARY KEY REFERENCES users(id),revision INTEGER NOT NULL,payload TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS hardware(id TEXT PRIMARY KEY,firmware TEXT,wifi_rssi INTEGER,wifi_channel INTEGER,uptime_ms INTEGER,peer_mac TEXT,peer_active INTEGER,last_seen REAL);
         CREATE TABLE IF NOT EXISTS hardware_events(id INTEGER PRIMARY KEY,device TEXT,type TEXT,details TEXT,received REAL);
         CREATE TABLE IF NOT EXISTS hardware_commands(id TEXT PRIMARY KEY,device TEXT,action TEXT,peer_mac TEXT,state TEXT,detail TEXT,created REAL);
         CREATE TABLE IF NOT EXISTS slots(race TEXT REFERENCES races(id),device TEXT,side INTEGER CHECK(side IN (0,1)),user TEXT REFERENCES users(id),PRIMARY KEY(race,device,side),UNIQUE(race,user));
         ''')
+        for table, column, declaration in (
+            ('sessions', 'active_race', 'TEXT'),
+            ('sessions', 'public_url', "TEXT NOT NULL DEFAULT ''"),
+            ('devices', 'position', 'INTEGER NOT NULL DEFAULT 0'),
+            ('devices', 'provider', 'TEXT'),
+        ):
+            if column not in [r['name'] for r in c.execute('PRAGMA table_info(' + table + ')')]:
+                c.execute('ALTER TABLE ' + table + ' ADD COLUMN ' + column + ' ' + declaration)
+        # Preserve the previously displayed sequence as the initial explicit order.
+        for row in c.execute('SELECT id FROM sessions'):
+            for index, d in enumerate(c.execute('SELECT id FROM devices WHERE session=? ORDER BY position,id', (row['id'],)).fetchall()):
+                c.execute('UPDATE devices SET position=? WHERE session=? AND id=?', (index, row['id'], d['id']))
+            if not c.execute('SELECT active_race FROM sessions WHERE id=?', (row['id'],)).fetchone()['active_race']:
+                last = c.execute('SELECT id FROM races WHERE session=? ORDER BY rowid DESC LIMIT 1', (row['id'],)).fetchone()
+                if last:
+                    c.execute('UPDATE sessions SET active_race=? WHERE id=?', (last['id'], row['id']))
+
+
+def add_device(c, sid, ident, user):
+    position = c.execute('SELECT COALESCE(MAX(position),-1)+1 AS next FROM devices WHERE session=?', (sid,)).fetchone()['next']
+    c.execute('INSERT OR IGNORE INTO devices(session,id,position,provider) VALUES(?,?,?,?)', (sid, ident, position, user))
+
+
+def lineup_issues(c, race):
+    slots = c.execute('SELECT * FROM slots WHERE race=?', (race['id'],)).fetchall()
+    count = len(slots)
+    if race['mode'] == 'duel':
+        return [] if count == 2 and {r['side'] for r in slots} == {0, 1} else ['Eins gegen eins benötigt genau zwei Spieler, links und rechts.']
+    if race['mode'] == 'training':
+        return [] if count == 1 else ['Training benötigt genau einen Spieler.']
+    if race['mode'] == 'relay':
+        return [] if {r['side'] for r in slots} == {0, 1} else ['Für die Staffel muss auf beiden Seiten mindestens ein Spieler aufgestellt sein.']
+    return ['Turnierplanung und deren Aufstellungsprüfung sind noch nicht freigeschaltet.']
+
+
+def public_url(value):
+    if not isinstance(value, str) or len(value) > 300:
+        raise Error(400, 'Ungültige Einladungsadresse')
+    if not value:
+        return ''
+    parts = urlsplit(value)
+    if parts.scheme not in ('http', 'https') or not parts.hostname or parts.username or parts.password or parts.query or parts.fragment or parts.path not in ('', '/'):
+        raise Error(400, 'Basisadresse benötigt http(s)://Hostname:Port ohne Pfad')
+    if parts.hostname in ('localhost','127.0.0.1','::1'):
+        raise Error(400, 'Für andere Geräte eine erreichbare LAN-IP oder Domain verwenden')
+    try:
+        parts.port
+    except ValueError:
+        raise Error(400, 'Ungültiger Port')
+    return value.rstrip('/')
 
 
 def device_id(value):
@@ -130,7 +183,7 @@ class Handler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path.startswith('/api/'):
             return self.handle_api('GET', path, {})
-        names = {'/': 'index.html', '/app.js': 'app.js', '/style.css': 'style.css'}
+        names = {'/': 'index.html', '/app.js': 'app.js', '/vault.js': 'vault.js', '/style.css': 'style.css'}
         if path not in names:
             return self.reply(404, {'error': 'Nicht gefunden'})
         file = ROOT / 'web' / names[path]
@@ -147,7 +200,7 @@ class Handler(BaseHTTPRequestHandler):
             if not urlsplit(self.path).path.startswith('/api/v1/') and self.headers.get('X-BierPeter-Request') != '1':
                 raise Error(403, 'Ungültiger Anfrageursprung')
             size = int(self.headers.get('Content-Length', '0'))
-            if size <= 0 or size > 16384:
+            if size <= 0 or size > (262144 if urlsplit(self.path).path == '/api/account/vault' else 16384):
                 raise Error(400, 'Ungültige Anfragegröße')
             if not self.headers.get('Content-Type', '').startswith('application/json'):
                 raise Error(415, 'JSON erforderlich')
@@ -296,13 +349,41 @@ class Handler(BaseHTTPRequestHandler):
             return {}, 'bp_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0'
         if path == '/api/me' and method == 'GET':
             return u, None
+        if path == '/api/account/devices':
+            if method == 'GET':
+                return [hardware_status(c, x['device']) for x in c.execute('SELECT device FROM managed_devices WHERE user=? ORDER BY device', (u['id'],))], None
+            ident = device_id(d.get('device'))
+            if d.get('action') == 'delete':
+                c.execute('DELETE FROM managed_devices WHERE user=? AND device=?', (u['id'], ident))
+            else:
+                c.execute('INSERT OR IGNORE INTO managed_devices VALUES(?,?)', (u['id'], ident))
+            return {}, None
+        if path == '/api/account/vault':
+            row = c.execute('SELECT * FROM private_vaults WHERE user=?', (u['id'],)).fetchone()
+            if method == 'GET':
+                return {'revision':row['revision'] if row else 0,'envelope':json.loads(row['payload']) if row else None}, None
+            if type(d.get('revision')) is not int or d['revision'] != (row['revision'] if row else 0):
+                raise Error(409, 'Private Daten wurden in einem anderen Fenster geändert; neu entsperren')
+            envelope = d.get('envelope')
+            if not isinstance(envelope,dict) or set(envelope)!={'v','alg','iv','ciphertext'} or envelope.get('v')!=1 or envelope.get('alg')!='A256GCM':
+                raise Error(400, 'Gültiger verschlüsselter Umschlag erforderlich')
+            try:
+                iv = base64.b64decode(envelope['iv'],validate=True)
+                ciphertext = base64.b64decode(envelope['ciphertext'],validate=True)
+            except (ValueError,TypeError,KeyError):
+                raise Error(400, 'Ungültige Verschlüsselungsdaten')
+            if len(iv)!=12 or not 16<=len(ciphertext)<=196608:
+                raise Error(400, 'Ungültige Verschlüsselungsgröße')
+            revision = d['revision']+1
+            c.execute('INSERT INTO private_vaults VALUES(?,?,?) ON CONFLICT(user) DO UPDATE SET revision=excluded.revision,payload=excluded.payload', (u['id'],revision,json.dumps(envelope)))
+            return {'revision':revision}, None
         if path == '/api/sessions':
             if method == 'POST':
                 sid = secrets.token_hex(12)
-                c.execute('INSERT INTO sessions VALUES(?,?,?,?)', (sid, text(d, 'title'), u['id'], secrets.token_urlsafe(12)))
+                c.execute('INSERT INTO sessions(id,title,host,code) VALUES(?,?,?,?)', (sid, text(d, 'title'), u['id'], secrets.token_urlsafe(12)))
                 c.execute('INSERT INTO members VALUES(?,?,?,NULL)', (sid, u['id'], 'accepted'))
                 if d.get('device'):
-                    c.execute('INSERT INTO devices VALUES(?,?)', (sid, device_id(d['device'])))
+                    add_device(c, sid, device_id(d['device']), u['id'])
                 return {'id': sid}, None
             return [dict(x) for x in c.execute('SELECT s.*,m.status,m.expires FROM sessions s JOIN members m ON m.session=s.id WHERE m.user=?', (u['id'],))], None
         if path == '/api/join' and method == 'POST':
@@ -328,22 +409,32 @@ class Handler(BaseHTTPRequestHandler):
                     return {'id': sid, 'title': srow['title'], 'host_name': c.execute('SELECT name FROM users WHERE id=?', (srow['host'],)).fetchone()['name'], 'membership': 'expired' if m['status']=='pending' and m['expires'] < time.time() else m['status'], 'expires': m['expires']}, None
                 s = self.access(c, sid, u)
                 s['membership'] = 'accepted'
+                s['public_url'] = s['public_url'] or os.environ.get('BIERPETER_PUBLIC_URL','')
                 s['hardware_key_configured'] = len(hardware_key()) >= 32
                 s['members'] = [dict(x) for x in c.execute('SELECT u.id,u.name,m.status,m.expires FROM members m JOIN users u ON u.id=m.user WHERE m.session=?', (sid,))]
                 # Pending identities are only visible to host; all participants see accepted roster.
                 if s['host'] != u['id']:
                     s['members'] = [x for x in s['members'] if x['status'] == 'accepted']
-                s['devices'] = [x['id'] for x in c.execute('SELECT id FROM devices WHERE session=? ORDER BY id', (sid,))]
+                s['devices'] = [x['id'] for x in c.execute('SELECT id FROM devices WHERE session=? ORDER BY position,id', (sid,))]
+                s['device_providers'] = {x['id']: x['provider'] for x in c.execute('SELECT id,provider FROM devices WHERE session=?', (sid,))}
                 s['hardware'] = [hardware_status(c, ident) for ident in s['devices']]
                 s['commands'] = [dict(x) for x in c.execute('SELECT id,device,action,peer_mac,state,detail FROM hardware_commands WHERE device IN (SELECT id FROM devices WHERE session=?) ORDER BY created', (sid,))]
                 s['races'] = [dict(x) for x in c.execute('SELECT * FROM races WHERE session=? ORDER BY rowid', (sid,))]
                 for r in s['races']:
                     r['slots'] = [dict(x) for x in c.execute('SELECT * FROM slots WHERE race=?', (r['id'],))]
+                    r['lineup_issues'] = lineup_issues(c, r)
                 return s, None
             action = parts[3] if len(parts) == 4 else ''
             if method != 'POST':
                 raise Error(404, 'Nicht gefunden')
-            s = self.access(c, sid, u, host=action != 'device')
+            if action == 'rejoin':
+                m = c.execute('SELECT * FROM members WHERE session=? AND user=?', (sid, u['id'])).fetchone()
+                if not m:
+                    raise Error(403, 'Keine vorherige Teilnahme')
+                if m['status'] != 'accepted' and (m['status'] != 'pending' or m['expires'] < time.time()):
+                    c.execute("UPDATE members SET status='pending',expires=? WHERE session=? AND user=?", (time.time()+900, sid, u['id']))
+                return {}, None
+            s = self.access(c, sid, u, host=action not in ('device', 'device-remove'))
             if action == 'member':
                 target = text(d, 'user')
                 if target == s['host']:
@@ -360,7 +451,49 @@ class Handler(BaseHTTPRequestHandler):
                 if status != 'accepted':
                     c.execute('DELETE FROM slots WHERE user=? AND race IN(SELECT id FROM races WHERE session=?)', (target, sid))
             elif action == 'device':
-                c.execute('INSERT OR IGNORE INTO devices VALUES(?,?)', (sid, device_id(text(d, 'device', 64))))
+                add_device(c, sid, device_id(text(d, 'device', 64)), u['id'])
+            elif action == 'device-remove':
+                ident = device_id(d.get('device'))
+                row = c.execute('SELECT provider FROM devices WHERE session=? AND id=?', (sid, ident)).fetchone()
+                if not row:
+                    raise Error(404, 'Gerät nicht in dieser Session')
+                if s['host'] != u['id'] and row['provider'] != u['id']:
+                    raise Error(403, 'Nur Host oder bereitstellender Teilnehmer darf entfernen')
+                c.execute('DELETE FROM slots WHERE device=? AND race IN(SELECT id FROM races WHERE session=?)', (ident, sid))
+                c.execute('DELETE FROM devices WHERE session=? AND id=?', (sid, ident))
+            elif action == 'device-order':
+                order = d.get('devices')
+                previous = [x['id'] for x in c.execute('SELECT id FROM devices WHERE session=?', (sid,))]
+                if not isinstance(order, list) or any(not isinstance(x, str) for x in order) or len(order)!=len(previous) or set(order)!=set(previous):
+                    raise Error(409, 'Reihenfolge muss genau die aktuellen Geräte enthalten')
+                for position, ident in enumerate(order):
+                    c.execute('UPDATE devices SET position=? WHERE session=? AND id=?', (position, sid, ident))
+            elif action == 'settings':
+                c.execute('UPDATE sessions SET public_url=? WHERE id=?', (public_url(d.get('public_url', '')), sid))
+            elif action == 'active-race':
+                rid = text(d, 'race')
+                if not c.execute('SELECT 1 FROM races WHERE id=? AND session=?', (rid, sid)).fetchone():
+                    raise Error(404, 'Race gehört nicht zur Session')
+                c.execute('UPDATE sessions SET active_race=? WHERE id=?', (rid, sid))
+            elif action in ('race-edit', 'race-delete'):
+                rid = text(d, 'race')
+                row = c.execute('SELECT * FROM races WHERE id=? AND session=?', (rid, sid)).fetchone()
+                if not row:
+                    raise Error(404, 'Race nicht gefunden')
+                if row['state'] != 'draft':
+                    raise Error(409, 'Nur Vorbereitungsentwürfe können geändert werden')
+                if action == 'race-delete':
+                    c.execute('DELETE FROM slots WHERE race=?', (rid,))
+                    c.execute('DELETE FROM races WHERE id=?', (rid,))
+                    if s['active_race'] == rid:
+                        last = c.execute('SELECT id FROM races WHERE session=? ORDER BY rowid DESC LIMIT 1', (sid,)).fetchone()
+                        c.execute('UPDATE sessions SET active_race=? WHERE id=?', (last['id'] if last else None, sid))
+                else:
+                    if d.get('mode') not in MODES or d.get('policy') not in ('host','free'):
+                        raise Error(400, 'Ungültiger Spielmodus oder Positionswahl')
+                    c.execute('UPDATE races SET title=?,mode=?,policy=? WHERE id=?', (text(d,'title'),d['mode'],d['policy'],rid))
+                    if d['mode'] != row['mode']:
+                        c.execute('DELETE FROM slots WHERE race=?', (rid,))
             elif action == 'pair':
                 first, second = device_id(d.get('first')), device_id(d.get('second'))
                 if first == second:
@@ -380,7 +513,9 @@ class Handler(BaseHTTPRequestHandler):
             elif action == 'race':
                 if d.get('mode') not in MODES or d.get('policy') not in ('host', 'free'):
                     raise Error(400, 'Ungültiger Spielmodus oder Positionswahl')
-                c.execute('INSERT INTO races(id,session,mode,policy,title) VALUES(?,?,?,?,?)', (secrets.token_hex(12), sid, d['mode'], d['policy'], text(d, 'title')))
+                rid = secrets.token_hex(12)
+                c.execute('INSERT INTO races(id,session,mode,policy,title) VALUES(?,?,?,?,?)', (rid, sid, d['mode'], d['policy'], text(d, 'title')))
+                c.execute('UPDATE sessions SET active_race=? WHERE id=?', (rid, sid))
             else:
                 raise Error(404, 'Nicht gefunden')
             return {}, None
@@ -405,6 +540,12 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 if not c.execute("SELECT 1 FROM members WHERE session=? AND user=? AND status='accepted'", (s['id'], target)).fetchone():
                     raise Error(400, 'Teilnehmer nicht zugelassen')
+                assigned = c.execute('SELECT device,side FROM slots WHERE race=?', (r['id'],)).fetchall()
+                is_new = current is None
+                if is_new and r['mode'] in ('duel','training') and len(assigned) >= (2 if r['mode']=='duel' else 1):
+                    raise Error(409, 'Maximale Spielerzahl für diesen Spielmodus erreicht')
+                if is_new and r['mode']=='duel' and any(x['side']==side for x in assigned):
+                    raise Error(409, 'Eins gegen eins benötigt eine linke und eine rechte Position')
                 c.execute('INSERT INTO slots VALUES(?,?,?,?) ON CONFLICT(race,device,side) DO UPDATE SET user=excluded.user', (r['id'], device, side, target))
             return {}, None
         raise Error(404, 'Nicht gefunden')

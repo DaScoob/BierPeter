@@ -1,44 +1,30 @@
-# Validierung Alpha 0.2
+# Validierung Alpha 0.2.1
 
-19 Python-API-/Integrationstests und acht JavaScript-/HTTP-Ablaufprüfungen bestanden. JavaScript-Syntax und Git-Diff-Prüfung bestanden.
+32 API-, Migrations- und Konfigurationstests sowie fünf Tests des Sicherheitsprototyps bestanden. Die bisherigen und erweiterten JavaScript-/HTTP-Abläufe einschließlich echter WebCrypto-Operationen sind bestanden.
 
-## Regression und Integration
+## Anwendung
 
-- Anmeldung/Abmeldung, Passwortminimum und Browser-Schreibschutz.
-- Host-Rechte, freie Positionen, konkurrierende und doppelte Positionsbelegung.
-- Persistenz mehrerer Races; Teilnehmerentfernung und Anfrageablauf.
-- Wartende Lobby: nur Titel/Host/eigener Status, keine fremden Teilnehmer- oder Geräteinformationen.
-- Aufruf einer Einladung verlängert eine noch laufende Beitrittsanfrage nicht.
-- MAC-Normalisierung und idempotente Gerätebereitstellung; Geräteaufnahme unmittelbar bei Session-Erstellung.
-- Authentifizierung der Firmware-Endpunkte; kein Online-Status ohne Heartbeat, Offline-Anzeige nach 15 Sekunden.
-- Pairing nur bei aktuellen Heartbeats und kompatiblem Kanal der bestehenden Testfirmware.
-- Echte Befehlswarteschlange, zielgebundene Bestätigung und gesonderter Peer-Status aus dem Heartbeat.
-- Validierung von Heartbeats und Ereignissen.
+- Vorhandene API-Regressionen: Anmeldung, Host-Rechte, gleichzeitige Positionsbelegung, Beitritt, Heartbeats und Gerätebefehle.
+- Neue API-Prüfungen: gemeinsame aktive Race-Auswahl, Neustart-Erhalt, Geräteentfernung mit Positionsbereinigung, getrennte Konto-Merkliste, explizite Gerätefolge und Validierung, Moduslimits, Race-Änderung/-Löschung, eigene verschlüsselte Speicherbereiche, Versionskonflikte, erneuter Beitritt und LAN-URL-Prüfung.
+- Migration wurde zusätzlich gegen eine Datenbank mit den alten Tabellenformen aus 0.2 geprüft. Geräte, Session-Titel und Race bleiben erhalten; neue Felder werden additiv ergänzt.
+- `tests/ui-flow.cjs`: bisherige Einstiegspfade gegen echten HTTP-Testserver.
+- `tests/ui-alpha021.cjs`: neue Bedienwege gegen echten HTTP-Testserver und echte WebCrypto-Operationen. Gemeinsames Race, Reihenfolge, Korrektur, Löschung, LAN-Link, Geräteverwaltung, Name verschlüsseln, Dashboard ändern, Wiederherstellung, falscher Schlüssel, manipuliertes Chiffrat, Abmelden/Sperren und Abbruch der Geräteübernahme.
+- DOM-Adapter prüft Abläufe, keine grafische Darstellung. Keine Browser-Installation oder grafische Browserprüfung in der Entwicklungsumgebung.
 
-## JavaScript gegen echten HTTP-Server
+## Sicherheitsprototyp
 
-`node tests/ui-flow.cjs` prüft:
+Fünf separate Tests: tatsächliche Account-/Race-HTTP-Dienste, getrennte Speicher/Schlüssel, verschlüsselte Speicherung, Manipulations- und Falschschlüsselerkennung, JWT-Algorithmus/Audience/Ablaufprüfung, Benutzerdatentrennung und Neustart.
 
-1. Registrierung aus einer Einladung führt direkt in die wartende Lobby.
-2. Host-Freigabe öffnet automatisch dieselbe vollständige Lobby.
-3. Bestehender Benutzer gelangt nach Login aus einer Einladung direkt hinein.
-4. Roher Geräte-Link `?84F3EB52F7F9` bleibt durch Registrierung erhalten.
-5. Neue Session enthält unmittelbar das gescannte Gerät.
-6. Neuladen erhält den Lobby-Kontext.
-7. Bestätigter Teilnehmer kann Gerät über Link in die Session bereitstellen.
-8. Ungültige Einladung erzeugt eine verständliche Fehleransicht; Anmeldung und Link bleiben erhalten.
+Die Tests sind keine unabhängige Sicherheitsprüfung. Gruppenverschlüsselung, Teilnehmer-Schlüsselidentität, Schlüsselrotation und Migration der bisherigen Lobby-Daten sind nicht abgeschlossen. Ein anderer Anmeldeschlüssel als der private Wiederherstellungsschlüssel wird verwendet; die privaten Namen/Einstellungen werden nicht serverseitig entschlüsselt. Beim Browser-Neuladen ist erneut zu entsperren.
 
-DOM-Adapter mit echter HTTP-Kommunikation, keine grafische Browserprüfung.
+## Lokal noch zu prüfen
 
-## Nicht lokal verifiziert
+- Docker-Build/-Start und Health-Warten im realen Betrieb.
+- Darstellung und Tastatur-/Touchbedienung im tatsächlichen Browser.
+- Datei-Download des Wiederherstellungsschlüssels sowie Entsperren mit dieser Datei.
+- LAN-Erreichbarkeit der vorgeschlagenen Einladungsadresse vom Smartphone.
+- Hardware-/Firmwareverhalten mit den vorhandenen ESPs; keine neue Spielfirmware in diesem Update.
 
-Docker und grafischer Browser stehen in dieser Entwicklungsumgebung nicht zur Verfügung. Keine Hardwareverbindung aus dieser Umgebung möglich. Das bestehende Geräteprotokoll wurde mit den Repository-Quellen der Race-Testfirmware abgeglichen und serverseitig getestet. Empfang echter Heartbeats sowie reales ESP-NOW-Pairing sind erst nach lokaler Schlüssel-/Adressprüfung nachweisbar.
+## Speicher und Aktualisierung
 
-## Lokale Abnahme
-
-- Bekannte Konten und Session nach Update prüfen (Volume bleibt erhalten).
-- Einladungslink in anderem Browser öffnen, registrieren und wartende Lobby prüfen.
-- Als Host annehmen; automatischen Wechsel in die vollständige Lobby prüfen.
-- Geräte-Link öffnen und Kennung nach Login/Registrierung in neue oder bestehende Session übernehmen.
-- Geräteschlüssel lokal aus vorhandener Firmware übernehmen.
-- Echte ESP-Heartbeats in der Lobby beobachten; bei kompatiblem Kanal Pairing anfordern und Peer-Meldungen prüfen.
+Der bestehende Dienst auf 6017 und sein Datenvolume bleiben erhalten. Ein lokaler SQLite-Snapshot wird vor der Aktualisierung im selben Datenvolume angelegt. Das Update setzt keine bestehenden Benutzerdaten zurück. Die getrennten Sicherheitsdienste sind optional und werden nicht automatisch gestartet.
