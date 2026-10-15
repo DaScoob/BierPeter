@@ -1,6 +1,12 @@
-# BierPeter · Alpha 0.3.0
+# BierPeter · Alpha 0.3.1
 
 Lokale Web-App mit gemeinsamer Session-Lobby, kontexterhaltenden Geräte-/Einladungslinks und einer Anbindung an das vorhandene ESP-Testfirmware-Protokoll.
+
+## Neu in 0.3.1: Firmware Alpha 0.3
+
+Gemeinsame Firmware für ESP8266, ESP32 und ESP32-S3 unter [firmware/](firmware/README.md): lokale 1vs1-/Staffellogik, ESP-NOW-Gerätesuche, SoftAP-Konfiguration und lokale Statusansicht. Servergesteuerte Demos verwenden virtuelle Sensoren auf den Geräten. Messergebnisse und serververmittelte Gerätepakete werden vor dem Upload verschlüsselt und erst im Browser gelesen. Demo-Ergebnisse werden getrennt angezeigt.
+
+Die zugehörige Serverversion ist 0.3.1-alpha, die Firmwareversion 0.3.0-alpha. Details, Vertrauensgrenzen und die getrennte Hardware-Abnahme stehen in [docs/FIRMWARE_030.md](docs/FIRMWARE_030.md). Für den lokalen ESP-Servertransport wird asynchrones HTTP im vertrauenswürdigen LAN verwendet; HTTPS/WSS ist noch nicht enthalten.
 
 ## Neu in 0.3.0
 
@@ -106,7 +112,7 @@ node --check web/app.js
 
 Implementiert: Konten, Sessions, Host-Bestätigung, Einladungs-/Geräte-Kontext, automatische Lobby-Aktualisierung, Aufstellung, persistente Heartbeats, echte Gerätebefehle und Bestätigungen.
 
-Nicht implementiert: neue Spielfirmware, Glasbereitschaft, Race-Start und Ergebniswertung, Trainings-Countdown, Turnierpläne, JSON-Portabilität, vollständige Account-Wiederherstellung. Kontolöschung ist seit 0.3.0 implementiert. Spielmodi sind als Vorbereitungsentwürfe wählbar. Es gibt keine simulierten Sensorereignisse oder Messzeiten.
+Nicht implementiert: physische Sensoranbindung, Wertung regulärer Hardware-Races im Statistik-Dashboard, Trainings-Countdown, Turnierpläne, JSON-Portabilität, vollständige Account-Wiederherstellung. Kontolöschung ist seit 0.3.0 implementiert. Spielmodi sind als Vorbereitungsentwürfe wählbar. Simulierte Sensorereignisse und Messzeiten gibt es ausschließlich im ausdrücklich gekennzeichneten Firmware-Demo-Modus.
 
 Passwort-Hashes: scrypt mit Salt. Login-Tokens: gehasht, serverseitig maximal zwölf Stunden. HttpOnly-Cookie mit SameSite=Strict; bei HTTPS `BIERPETER_SECURE_COOKIE=1` verwenden. Keine externen Ressourcen oder Analyse. Der Standardbibliothek-Server ist eine lokale Entwicklungsfassung. Vor öffentlichem Dienstbetrieb sind Hosting-Härtung, Betreiberangaben, Datenschutz und vollständige Lösch-/Exportfunktionen zu vervollständigen.
 

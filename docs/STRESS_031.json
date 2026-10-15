@@ -1,0 +1,33 @@
+{
+  "mixed_load": {
+    "requests": 240,
+    "parallel_workers": 12,
+    "elapsed_s": 0.36,
+    "status_counts": {
+      "200": 240
+    },
+    "median_ms": 22.4,
+    "p95_ms": 28.8,
+    "max_ms": 36.9
+  },
+  "position_contention": {
+    "requests": 48,
+    "status_counts": {
+      "200": 24,
+      "409": 24
+    },
+    "final_occupants": 1
+  },
+  "concurrent_snapshot": {
+    "active_race_present_in_returned_races": true,
+    "observed": "The response retains a single consistent read snapshot"
+  },
+  "login_burst": {
+    "successful_credentials_requests": 22,
+    "status_counts": {
+      "200": 22
+    },
+    "scope": "Successful logins do not consume the failed-login budget"
+  },
+  "orphan_slots": 0
+}

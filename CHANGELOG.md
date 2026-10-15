@@ -56,3 +56,9 @@
 - Explizit ungeprüfte Geräteverbindung; keine simulierten Messwerte.
 - Separate Docker-Konfiguration mit localhost-Port 6018.
 - Keine Strafzeiten und keine automatische Race-Zeitgrenze.
+
+## 0.3.1-alpha / Firmware 0.3.0-alpha
+- New shared ESP8266/ESP32/ESP32-S3 firmware with local 1vs1/relay engine, per-device virtual sensors, ESP-NOW discovery, reliable framed messages and asynchronous SoftAP configuration/status.
+- Server-triggered real-time or accelerated demos, encrypted server fallback between devices and recipient-specific encrypted results displayed in the existing lobby.
+- Persistent device configuration/identity, volatile sessions/results, bounded reconnect buffers, no race timeout or penalties.
+- Browser-generated X25519 keys in the existing encrypted vault, HKDF-SHA-256/AES-256-GCM interoperability checks, device-key pinning and separate demo presentation.

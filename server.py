@@ -17,13 +17,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
 import social
+import runs
 
 ROOT = Path(__file__).parent
 DB = Path(os.environ.get('BIERPETER_DB', str(ROOT / 'data/bierpeter.sqlite3')))
 SECURE = os.environ.get('BIERPETER_SECURE_COOKIE', '0') == '1'
 TTL = 12 * 3600
 ONLINE_WINDOW = 15
-VERSION = '0.3.0-alpha'
+VERSION = '0.3.1-alpha'
 AUTH_ATTEMPTS = {}
 AUTH_LOCK = threading.Lock()
 WRITE_LOCK = threading.Lock()
@@ -82,10 +83,12 @@ def init():
             ('devices', 'position', 'INTEGER NOT NULL DEFAULT 0'),
             ('devices', 'provider', 'TEXT'),
             ('hardware_commands', 'session', 'TEXT'),
+            ('hardware_commands', 'payload', "TEXT NOT NULL DEFAULT '{}'"),
             ('sessions', 'allow_member_invites', 'INTEGER NOT NULL DEFAULT 0'),
         ):
             if column not in [r['name'] for r in c.execute('PRAGMA table_info(' + table + ')')]:
                 c.execute('ALTER TABLE ' + table + ' ADD COLUMN ' + column + ' ' + declaration)
+        runs.init(c)
         # Preserve the previously displayed sequence as the initial explicit order.
         for row in c.execute('SELECT id FROM sessions'):
             if legacy_provider:
@@ -168,6 +171,8 @@ def hardware_status(c, ident):
     if not row:
         return {'id': ident, 'online': False, 'last_seen': None}
     value = dict(row)
+    extra=c.execute('SELECT public,state,ready FROM firmware_status WHERE device=?',(ident,)).fetchone()
+    if extra:value.update({'run_public':extra['public'],'game_state':extra['state'],'sensor_ready':bool(extra['ready'])})
     value['online'] = time.time() - value['last_seen'] <= ONLINE_WINDOW
     value['peer_active'] = bool(value['peer_active']) and value['online']
     return value
@@ -282,7 +287,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         try:
-            if not urlsplit(self.path).path.startswith('/api/v1/') and self.headers.get('X-BierPeter-Request') != '1':
+            if not urlsplit(self.path).path.startswith('/api/v1/') and urlsplit(self.path).path != '/api/admin/demo' and self.headers.get('X-BierPeter-Request') != '1':
                 raise Error(403, 'Ungültiger Anfrageursprung')
             size = int(self.headers.get('Content-Length', '0'))
             if size <= 0 or size > (262144 if urlsplit(self.path).path in ('/api/account/vault','/api/account/devices') or self.path.endswith('/names') else 16384):
@@ -349,6 +354,9 @@ class Handler(BaseHTTPRequestHandler):
             raise Error(503, 'Gerätezugang noch nicht konfiguriert')
         if not hmac.compare_digest(self.headers.get('X-Device-Key', ''), expected):
             raise Error(401, 'Ungültiger Geräteschlüssel')
+        result = runs.hardware(c,method,path,d,parse_qs(urlsplit(self.path).query),Error,device_id)
+        if result is not None:
+            return result
         if path == '/api/v1/heartbeat' and method == 'POST':
             ident = device_id(d.get('device_id'))
             if not re.fullmatch(r'[0-9A-F]{12}', ident):
@@ -378,9 +386,20 @@ class Handler(BaseHTTPRequestHandler):
             c.execute('DELETE FROM discoveries WHERE observer=? OR seen<?',(ident,time.time()-ONLINE_WINDOW))
             c.executemany('INSERT OR REPLACE INTO discoveries VALUES(?,?,?,?,?,?)',found)
             c.execute('INSERT INTO hardware VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET firmware=excluded.firmware,wifi_rssi=excluded.wifi_rssi,wifi_channel=excluded.wifi_channel,uptime_ms=excluded.uptime_ms,peer_mac=excluded.peer_mac,peer_active=excluded.peer_active,last_seen=excluded.last_seen', (ident, firmware, d['wifi_rssi'], d['wifi_channel'], d['uptime_ms'], peer, int(bool(peer and d.get('peer_active', False))), time.time()))
+            if 'run_public' in d:
+                public = runs.key(d['run_public'],Error)
+                state=d.get('game_state','idle')
+                if state not in ('idle','prepared','running','finished'):raise Error(400,'Ungültiger Spielzustand')
+                c.execute('INSERT INTO firmware_status VALUES(?,?,?,?,?) ON CONFLICT(device) DO UPDATE SET public=excluded.public,state=excluded.state,ready=excluded.ready,seen=excluded.seen',(ident,public,state,int(d.get('ready') is True),time.time()))
+                if state=='running':c.execute("UPDATE runs SET state='running' WHERE host=? AND state='queued'",(ident,))
+                for neighbor in neighbors:
+                    if 'run_public' in neighbor:
+                        c.execute('INSERT INTO firmware_status VALUES(?,?,?,?,?) ON CONFLICT(device) DO UPDATE SET public=excluded.public,seen=excluded.seen',(device_id(neighbor['device_id']),runs.key(neighbor['run_public'],Error),'idle',0,time.time()))
             return {'status': 'ok', 'device_id': ident}
         if path == '/api/v1/events' and method == 'POST':
             ident, kind = device_id(d.get('device_id')), text(d, 'type', 100)
+            if kind.lower() in ('run','race','result','measurement','split','sensor','done','lift','return','clink'):
+                raise Error(400,'Messdaten benötigen den verschlüsselten Run-Endpunkt')
             details = d.get('details')
             if details is not None and not isinstance(details, dict):
                 raise Error(400, 'Ereignisdetails müssen ein JSON-Objekt sein')
@@ -413,7 +432,7 @@ class Handler(BaseHTTPRequestHandler):
     def command_payload(row):
         if not row:
             return None
-        return {'command_id': row['id'], 'device_id': row['device'], 'action': row['action'], 'peer_mac': row['peer_mac'], 'state': row['state'], 'detail': row['detail']}
+        return {'payload': json.loads(row['payload']), 'command_id': row['id'], 'device_id': row['device'], 'action': row['action'], 'peer_mac': row['peer_mac'], 'state': row['state'], 'detail': row['detail']}
 
     def api(self, c, method, path, d):
         if path in ('/api/health', '/api/v1/health') and method == 'GET':
@@ -457,7 +476,16 @@ class Handler(BaseHTTPRequestHandler):
             c.execute('INSERT INTO logins VALUES(?,?,?)', (hashlib.sha256(token.encode()).hexdigest(), u['id'], time.time() + TTL))
             cookie = 'bp_session=' + token + '; Path=/; HttpOnly; SameSite=Strict' + ('; Secure' if SECURE else '')
             return {'id': u['id'], 'name': u['name']}, cookie
+        if path == '/api/admin/demo' and method == 'POST':
+            expected=os.environ.get('BIERPETER_ADMIN_KEY','')
+            supplied=self.headers.get('X-Admin-Key','')
+            if len(expected)<32 or not hmac.compare_digest(supplied,expected):raise Error(401,'Administrativer Schlüssel erforderlich')
+            return runs.start(c,d,Error,device_id,hardware_status),None
         u = self.user(c)
+        if path == '/api/account/run-key' and method == 'POST':
+            public=runs.key(d.get('public'),Error)
+            c.execute('INSERT INTO run_keys VALUES(?,?) ON CONFLICT(user) DO UPDATE SET public=excluded.public',(u['id'],public))
+            return {},None
         if path == '/api/logout' and method == 'POST':
             cookie = SimpleCookie(self.headers.get('Cookie', ''))
             c.execute('DELETE FROM logins WHERE token=?', (hashlib.sha256(cookie['bp_session'].value.encode()).hexdigest(),))
@@ -548,6 +576,8 @@ class Handler(BaseHTTPRequestHandler):
                 except Error:
                     s['public_url'] = ''
                     s['public_url_error'] = 'Die bisher gespeicherte Einladungsadresse ist nicht für andere Geräte geeignet. Eine erreichbare LAN-Adresse oder Domain einstellen.'
+                s['runs'] = runs.listing(c,sid,u['id'])
+                s['run_keys'] = {x['user']:x['public'] for x in c.execute("SELECT k.* FROM run_keys k JOIN members m ON m.user=k.user WHERE m.session=? AND m.status='accepted'",(sid,))}
                 s['hardware_key_configured'] = len(hardware_key()) >= 32
                 s['members'] = [dict(x) for x in c.execute('SELECT u.id,u.name,m.status,m.expires FROM members m JOIN users u ON u.id=m.user WHERE m.session=?', (sid,))]
                 # Pending identities are only visible to host; all participants see accepted roster.
@@ -587,6 +617,20 @@ class Handler(BaseHTTPRequestHandler):
                     c.execute("UPDATE members SET status='pending',expires=? WHERE session=? AND user=?", (time.time()+900, sid, u['id']))
                 return {}, None
             s = self.access(c, sid, u, host=action not in ('device', 'device-remove', 'names', 'invite'))
+            if action in ('device','device-remove','device-order','member','active-race','race-edit','race-delete','race') and c.execute("SELECT 1 FROM runs WHERE session=? AND state IN('queued','running')",(sid,)).fetchone():
+                raise Error(409,'Aufstellung während eines offenen Runs gesperrt')
+            if action == 'demo':
+                return runs.start(c,{**d,'session':sid},Error,device_id,hardware_status,u['id']),None
+            if action == 'run-abort':
+                row=c.execute('SELECT * FROM runs WHERE id=? AND session=?',(d.get('run'),sid)).fetchone()
+                if not row:raise Error(404,'Run nicht gefunden')
+                for peer in json.loads(row['config'])['peers']:
+                    runs.queue(c,peer['id'],'abort',{'run':row['id']},sid)
+                c.execute("UPDATE hardware_commands SET state='cancelled' WHERE session=? AND action='demo' AND state='pending'",(sid,))
+                c.execute("UPDATE runs SET state='aborted' WHERE id=?",(row['id'],))
+                c.execute('DELETE FROM run_results WHERE run=?',(row['id'],))
+                c.execute('DELETE FROM run_relay WHERE run=?',(row['id'],))
+                return {},None
             if action == 'delete':
                 if c.execute("SELECT 1 FROM races WHERE session=? AND state='running'",(sid,)).fetchone():
                     raise Error(409, 'Laufende Runde zuerst regulär beenden oder abbrechen')
@@ -703,6 +747,7 @@ class Handler(BaseHTTPRequestHandler):
             if not r:
                 raise Error(404, 'Race nicht gefunden')
             s = self.access(c, r['session'], u)
+            if c.execute("SELECT 1 FROM runs WHERE session=? AND state IN('queued','running')",(s['id'],)).fetchone():raise Error(409,'Aufstellung während eines offenen Runs gesperrt')
             host = s['host'] == u['id']
             if not host and r['policy'] != 'free':
                 raise Error(403, 'Positionen werden vom Host vergeben')

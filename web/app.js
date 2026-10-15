@@ -2,9 +2,9 @@
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const modes={duel:'1 gegen 1',relay:'Staffellauf',marathon:'BierMarathon',general:'Generalbierjunge',olympics:'BierOlympiade',training:'Training'};
-const state={user:null,sessions:[],session:null,race:null,view:'home',auth:'login',device:'',busy:false,error:'',managed:[],private:null,vaultKey:null,vaultRevision:0,recovery:'',dashboardEdit:false,sharedNames:{},sharedFingerprint:'',shareCache:{},shareError:'',polling:false,social:{friends:[],incoming:[],outgoing:[],known:[],blocked:[],invitations:[]},keyInput:'',keyVisible:{unlock:false,generated:false}};
+const state={user:null,sessions:[],session:null,race:null,view:'home',auth:'login',device:'',busy:false,error:'',managed:[],private:null,vaultKey:null,vaultRevision:0,recovery:'',dashboardEdit:false,sharedNames:{},sharedFingerprint:'',shareCache:{},shareError:'',polling:false,social:{friends:[],incoming:[],outgoing:[],known:[],blocked:[],invitations:[]},runResults:{},runErrors:{},keyInput:'',keyVisible:{unlock:false,generated:false}};
 const button=(label,action,minor=false)=>`<button type="button" class="btn ${minor?'outline':''}" data-action="${esc(action)}">${label}</button>`;
-const title=(t,d='')=>`<div class="micro">BierPeter · Alpha 0.3.0</div><h1 class="title">${t}</h1><p class="desc">${d}</p>`;
+const title=(t,d='')=>`<div class="micro">BierPeter · Alpha 0.3.1</div><h1 class="title">${t}</h1><p class="desc">${d}</p>`;
 const field=(name,label,placeholder='',type='text',max=80,value='')=>`<label class="field"><span>${label}</span><input name="${name}" type="${type}" required maxlength="${max}" placeholder="${esc(placeholder)}" value="${esc(value)}" autocomplete="${type==='password'?(state.auth==='register'?'new-password':'current-password'):'off'}"></label>`;
 function resetSocial(){state.social={friends:[],incoming:[],outgoing:[],known:[],blocked:[],invitations:[]};}
 async function loadSocial(){const id=state.user?.id,next=await api('/social');if(state.user?.id===id)state.social=next;}
@@ -82,13 +82,44 @@ function discoveredDevices(){
   const s=state.session,items=(s.discoveries||[]).filter(x=>!s.devices.includes(x.device));
   return `<div class="discovered"><h3 class="section-title">Von meinen BierPetern gefunden</h3>${items.map(x=>`<div class="list-row"><div class="grow"><strong>${esc(deviceName(x.device))}</strong><small>${esc(x.device)} · ${x.transport==='esp-now'?'ESP-NOW':'WLAN'} · über ${esc(deviceName(x.observer))} · Kanal ${x.channel}</small></div>${button('Hinzufügen','found:'+x.device,true)}</div>`).join('')||'<p class="section-sub">Aktuell keine weiteren Geräte gemeldet. Geräte einschalten oder ihren QR-Code scannen.</p>'}</div>`;
 }
+async function ensureRunKey(){
+  if(!state.private||!globalThis.BierPeterRuns)return;
+  if(!state.private.runIdentity){const next=structuredClone(state.private);try{next.runIdentity=await BierPeterRuns.create();}catch{throw Error('Dieser Browser unterstützt X25519 noch nicht. Ein aktueller Browser mit HTTPS oder localhost ist erforderlich.');}await savePrivate(next);}
+  await api('/account/run-key',{public:state.private.runIdentity.public});
+}
+async function trustRunDevices(session){
+  const next=structuredClone(state.private);next.runTrust=next.runTrust||{};
+  for(const h of session.hardware||[]){if(!h.run_public)continue;const old=next.runTrust[h.id];if(old&&old!==h.run_public)throw Error('Geräteschlüssel von '+h.id+' hat gewechselt. Schlüssel in der lokalen Geräteoberfläche vergleichen und ausdrücklich neu bestätigen.');next.runTrust[h.id]=h.run_public;}
+  if(JSON.stringify(next)!==JSON.stringify(state.private))await savePrivate(next);
+}
+async function syncRunResults(session){
+  if(!state.private?.runIdentity||!globalThis.BierPeterRuns)return;
+  for(const run of session.runs||[]){
+    if(!run.envelope||state.runResults[run.id])continue;
+    try{const pin=state.private.runTrust?.[run.host];if(pin&&pin!==run.host_public)throw Error('Geräteschlüssel hat gewechselt');state.runResults[run.id]=await BierPeterRuns.open(state.private.runIdentity,run,state.user.id);delete state.runErrors[run.id];}
+    catch{state.runErrors[run.id]='Messdaten konnten nicht entschlüsselt werden. Schlüssel und Gerätezuordnung prüfen.';}
+  }
+}
+function runPanel(){
+ const session=state.session,r=activeRace(),runs=session.runs||[],pending=runs.some(x=>['queued','running'].includes(x.state));
+ return `<section class="panel" id="hardware-run"><h2 class="section-title">Firmware Alpha 0.3 · Demo-Test</h2><p class="section-sub">Virtuelle Sensorik auf echten Geräten. Demo-Ergebnisse werden getrennt angezeigt und verändern keine Bestzeiten.</p>`+
+ (!state.private?'<p>Zum Starten und Lesen der Messungen zuerst unter Konto den privaten Bereich entsperren.</p>':'')+
+ (isHost()&&state.private&&r&&['duel','relay'].includes(r.mode)&&!pending?button('Demo in Echtzeit starten','demo:true')+button('Demo beschleunigt starten','demo:false',true):'')+
+ `<details><summary>Geräteschlüssel prüfen</summary><p class="footnote">Der erste Schlüssel wird zunächst über den Server bezogen. Für eine unabhängige Prüfung mit der lokalen SoftAP-Oberfläche vergleichen. Spätere Änderungen werden erkannt.</p>${(session.hardware||[]).filter(h=>h.run_public).map(h=>`<p class="key-fingerprint">${esc(h.id)}: ${esc(h.run_public)}</p>${state.private?button('Verglichenen Schlüssel bestätigen','trust-run:'+h.id,true):''}`).join('')}</details>`+
+ runs.map(run=>{const result=state.runResults[run.id];return `<article class="run-result"><h3>DEMO · ${esc(({queued:'Vorbereitung / Run offen',running:'Läuft',finished:'Beendet',aborted:'Verworfen'})[run.state]||run.state)}</h3><p class="footnote">${run.realtime?'Echtzeit':'Beschleunigt'} · Host ${esc(run.host)}</p>`+
+ (state.runErrors[run.id]?`<p class="error">${esc(state.runErrors[run.id])}</p>`:'')+
+ (result?`<div class="team-results">${result.total_us.map((t,i)=>`<p>Team ${i?'B':'A'}: <strong>${(t/1e6).toFixed(3)} s</strong></p>`).join('')}</div><div class="table-scroll"><table><thead><tr><th>BierPeter</th><th>Seite</th><th>Einzelzeit</th></tr></thead><tbody>${result.splits.map(x=>`<tr><td>${esc(deviceName(x.device))}</td><td>${x.side?'Rechts':'Links'}</td><td>${(x.duration_us/1e6).toFixed(3)} s</td></tr>`).join('')}</tbody></table></div>`:run.envelope?'<p class="section-sub">Verschlüsselte Messung vorhanden. Privaten Bereich zum Lesen entsperren.</p>':'')+
+ (isHost()&&['queued','running'].includes(run.state)?button('Run verwerfen','run-abort:'+run.id,true):'')+'</article>';}).join('')+'</section>';
+}
 async function ensureIdentity(){
   if(!state.private.identity){
     const next=structuredClone(state.private);next.identity=await BierPeterSharing.createIdentity();await savePrivate(next);
   }
   await api('/account/identity',{public_key:BierPeterSharing.publicPart(state.private.identity)});
+  await ensureRunKey();
 }
 async function syncNames(session){
+  await syncRunResults(session);
   state.sharedNames={};state.shareError='';state.fingerprints={};
   const keys=session.identity_keys||{},own=state.user.id;
   if(!state.private?.identity)return;
@@ -223,14 +254,14 @@ function deviceCards(){
 function readiness(){
   const s=state.session,r=activeRace(),used=new Set(r?.slots.map(x=>x.device)||[]);
   const checks=[['Spielrunde festgelegt',!!r],['Benötigte Spieler aufgestellt',!!r&&r.lineup_issues?.length===0],['Aufgestellte Geräte senden Heartbeats',used.size>0&&[...used].every(id=>s.hardware.find(h=>h.id===id)?.online)]];
-  return `<section class="panel" id="next"><h2 class="section-title">4 · Bereit für das Spiel?</h2>${checks.map(([label,ok])=>`<div class="list-row"><span class="tag ${ok?'':'amber'}">${ok?'✓':'○'}</span><span class="section-sub">${label}</span></div>`).join('')}${r?.lineup_issues?.map(x=>`<p class="section-sub">${esc(x)}</p>`).join('')||''}<p class="section-sub">${r?.mode==='relay'?'Die Teamzeit läuft vom Anstoßen bis zum letzten Glas durch. Keine Zeitstrafen und kein Race-Timeout.':r?.mode==='training'?'Der Trainingsstart soll per App einen akustischen Countdown am Gerät auslösen.':'Gestartet und gemessen wird auf den Geräten.'}</p><div class="note">Geräteerkennung und ESP-NOW-Pairing sind angebunden. Glasbereitschaft, Race-Steuerung und Messergebnisse benötigen die spätere Spielfirmware und sind noch nicht freigeschaltet.</div></section>`;
+  return `<section class="panel" id="next"><h2 class="section-title">4 · Bereit für das Spiel?</h2>${checks.map(([label,ok])=>`<div class="list-row"><span class="tag ${ok?'':'amber'}">${ok?'✓':'○'}</span><span class="section-sub">${label}</span></div>`).join('')}${r?.lineup_issues?.map(x=>`<p class="section-sub">${esc(x)}</p>`).join('')||''}<p class="section-sub">${r?.mode==='relay'?'Die Teamzeit läuft vom Anstoßen bis zum letzten Glas durch. Keine Zeitstrafen und kein Race-Timeout.':r?.mode==='training'?'Der Trainingsstart soll per App einen akustischen Countdown am Gerät auslösen.':'Gestartet und gemessen wird auf den Geräten.'}</p><div class="note">Geräteerkennung und ESP-NOW-Pairing sind angebunden. Firmware Alpha 0.3 unterstützt den ausdrücklich gekennzeichneten Demo-Test. Physische Sensoren und weitere Spielmodi folgen später.</div></section>`;
 }
 function lobby(){
   const s=state.session;
   if(s.membership!=='accepted')return waiting();
   return title(esc(s.title),'Die Lobby: gemeinsam vorbereiten, direkt an den Geräten aufstellen.')+
     `<div class="lobby-progress" aria-label="Vorbereitung"><a href="#group">1 Gruppe</a><a href="#race-config">2 Race</a><a href="#lineup">3 Aufstellung</a><a href="#next">4 Bereitschaft</a></div>`+
-    roster()+raceConfig()+deviceCards()+readiness()+`<section class="panel"><h2 class="section-title">Gerätenamen in der Gruppe</h2><p class="section-sub">${state.private?'Namen werden gezielt verschlüsselt an zugelassene Teilnehmer freigegeben. Neue Teilnehmer sehen sie, sobald der mitbringende Spieler die Lobby mit entsperrten privaten Daten geöffnet hat.':'Unter Konto die privaten Daten entsperren, um eigene Namen zu teilen und Namen anderer Teilnehmer zu lesen.'}</p>${state.shareError?`<p class="error">${esc(state.shareError)}</p>`:''}<details><summary>Schlüssel vergleichen</summary><p class="footnote">Schlüsselabdrücke über einen unabhängigen Weg vergleichen. Ohne Vergleich ist die Schlüsselzuordnung vom Server abhängig.</p>${Object.entries(s.identity_keys||{}).map(([id,key])=>`<div class="key-fingerprint" data-identity="${esc(id)}">${esc(s.members.find(m=>m.id===id)?.name||id)}: ${esc(state.fingerprints?.[id]||'Private Daten zum Prüfen entsperren')}</div>`).join('')}</details></section>${isHost()?button('Session löschen','delete-session:'+s.id,true):''}`;
+    roster()+raceConfig()+deviceCards()+readiness()+runPanel()+`<section class="panel"><h2 class="section-title">Gerätenamen in der Gruppe</h2><p class="section-sub">${state.private?'Namen werden gezielt verschlüsselt an zugelassene Teilnehmer freigegeben. Neue Teilnehmer sehen sie, sobald der mitbringende Spieler die Lobby mit entsperrten privaten Daten geöffnet hat.':'Unter Konto die privaten Daten entsperren, um eigene Namen zu teilen und Namen anderer Teilnehmer zu lesen.'}</p>${state.shareError?`<p class="error">${esc(state.shareError)}</p>`:''}<details><summary>Schlüssel vergleichen</summary><p class="footnote">Schlüsselabdrücke über einen unabhängigen Weg vergleichen. Ohne Vergleich ist die Schlüsselzuordnung vom Server abhängig.</p>${Object.entries(s.identity_keys||{}).map(([id,key])=>`<div class="key-fingerprint" data-identity="${esc(id)}">${esc(s.members.find(m=>m.id===id)?.name||id)}: ${esc(state.fingerprints?.[id]||'Private Daten zum Prüfen entsperren')}</div>`).join('')}</details></section>${isHost()?button('Session löschen','delete-session:'+s.id,true):''}`;
 }
 const WIDGETS={summary:'Überblick',history:'Ergebnistabelle',trend:'Zeitverlauf',modes:'Spielmodi'};
 function defaultPrivate(){return {v:1,aliases:{},widgets:Object.keys(WIDGETS).map(id=>({id,visible:true})),results:[]};}
@@ -240,7 +271,7 @@ function validatePrivate(d){
   if(Object.values(d.aliases).some(v=>typeof v!=='string'||v.length>60))throw new Error('Ungültige Gerätenamen.');
   if(d.results.some(r=>!r||typeof r.time_ms!=='number'||!Number.isFinite(r.time_ms)||r.time_ms<0||typeof r.mode!=='string'||typeof r.date!=='string'))throw new Error('Ungültige private Ergebnisdaten.');
 }
-function lockVault(){clearKeyInput();state.keyVisible.generated=false;state.sharedNames={};state.shareCache={};state.fingerprints={};state.shareError='';state.private=null;state.vaultKey=null;state.recovery='';state.vaultRevision=0;state.dashboardEdit=false;}
+function lockVault(){state.runResults={};state.runErrors={};clearKeyInput();state.keyVisible.generated=false;state.sharedNames={};state.shareCache={};state.fingerprints={};state.shareError='';state.private=null;state.vaultKey=null;state.recovery='';state.vaultRevision=0;state.dashboardEdit=false;}
 async function savePrivate(next){
   if(!state.vaultKey)throw new Error('Private Daten zuerst entsperren.');validatePrivate(next);
   const envelope=await BierPeterVault.seal(state.vaultKey,state.user.id,next);
@@ -326,6 +357,9 @@ async function action(a){
   if(a.startsWith('session:')){await enterSession(a.slice(8));return;}
   if(/^(accept|reject|remove):/.test(a)){const [act,user]=a.split(':');if(act==='remove'&&!confirm('Teilnehmer entfernen?'))return;await api('/sessions/'+state.session.id+'/member',{user,status:{accept:'accepted',reject:'rejected',remove:'removed'}[act]});await refresh();return;}
   if(a==='profile'){[state.managed,state.sessions]=await Promise.all([api('/account/devices'),api('/sessions')]);await loadSocial();state.view='profile';render();return;}
+  if(a.startsWith('trust-run:')){if(!state.private)throw Error('Privaten Bereich zuerst entsperren.');const id=a.slice(10),h=state.session.hardware.find(x=>x.id===id);if(!h?.run_public)throw Error('Kein Geräteschlüssel vorhanden.');if(!confirm('Öffentlichen Schlüssel mit der lokalen SoftAP-Oberfläche verglichen? '+h.run_public))return;const next=structuredClone(state.private);next.runTrust=next.runTrust||{};next.runTrust[id]=h.run_public;await savePrivate(next);render();return;}
+  if(a.startsWith('demo:')){await ensureRunKey();await trustRunDevices(state.session);const race=activeRace(),host=state.session.devices.find(id=>race.slots.some(s=>s.device===id));if(!host)throw Error('Zuerst die Aufstellung vervollständigen.');await api('/sessions/'+state.session.id+'/demo',{device_id:host,realtime:a==='demo:true'});await refresh();return;}
+  if(a.startsWith('run-abort:')){if(!confirm('Run verwerfen? Es wird kein Ergebnis gewertet.'))return;await api('/sessions/'+state.session.id+'/run-abort',{run:a.slice(10)});await refresh();return;}
   if(a==='vault-lock'){lockVault();render();return;}
   if(a==='vault-create'){if((await api('/account/vault')).envelope)throw new Error('Der private Bereich besteht bereits. Die vorhandene Schlüsseldatei laden.');state.keyVisible.generated=false;state.recovery=BierPeterVault.createRecovery();render();return;}
   if(a==='vault-download'){downloadRecovery();return;}

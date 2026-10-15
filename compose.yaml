@@ -8,6 +8,7 @@ services:
       - bierpeter-data:/data
     environment:
       BIERPETER_SECURE_COOKIE: "${BIERPETER_SECURE_COOKIE:-0}"
+      BIERPETER_ADMIN_KEY: "${BIERPETER_ADMIN_KEY:-}"
       DEVICE_API_KEY: "${DEVICE_API_KEY:-}"
       BIERPETER_PUBLIC_URL: "${BIERPETER_PUBLIC_URL:-}"
     cap_drop:

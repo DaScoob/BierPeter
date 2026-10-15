@@ -35,3 +35,12 @@
 - Key import must stage the key locally for reveal/copy before explicit unlock. Clear the editor after unlock/navigation/logout. Never upload raw recovery keys.
 - Contact/invitation metadata is presently visible to the service. Do not describe it as E2EE.
 - Also validate node tests/ui-alpha030.cjs and tests/test_alpha030.py through unittest discovery.
+
+## Firmware Alpha 0.3 / Server 0.3.1
+- New firmware under firmware/ is explicitly authorized; preserve the separate legacy Race Test reference.
+- Only explicitly marked demo sensor inputs may be simulated. Server never invents measured results.
+- Run measurements and server-forwarded game packets must be sealed on the device before upload. Private recipient keys remain in the encrypted browser vault.
+- Demo data never changes regular best times or personal statistics.
+- Freeze roster/channel during a run; no automatic game timeout, no time penalty, no persistent offline history.
+- Validate native engine/embedded-crypto interoperability with python3 firmware/test/check-native.py, API tests, node tests/ui-firmware.cjs and all three PlatformIO targets.
+- Physical radio, timing and RAM tests must be reported separately from native simulations and successful builds.

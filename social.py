@@ -36,6 +36,14 @@ def delete_session(c, sid):
 
 
 def delete_account(c, uid):
+    # Drop managed runs containing this recipient, including queued public-key payloads.
+    import json
+    affected=[]
+    for r in c.execute('SELECT id,config FROM runs').fetchall():
+        if any(x['id']==uid for x in json.loads(r['config'])['recipients']):affected.append(r['id'])
+    for rid in affected:
+        c.execute("DELETE FROM hardware_commands WHERE action='demo' AND json_extract(payload,'$.run')=?",(rid,))
+        c.execute('DELETE FROM runs WHERE id=?',(rid,))
     for row in c.execute('SELECT id FROM sessions WHERE host=?',(uid,)).fetchall():
         delete_session(c,row['id'])
     c.execute('DELETE FROM session_invites WHERE sender=? OR recipient=?',(uid,uid))

@@ -4,3 +4,7 @@ secrets
 data
 __pycache__
 *.bundle
+
+firmware/.pio
+firmware/.venv
+firmware/data

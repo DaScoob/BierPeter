@@ -30,3 +30,7 @@ Die Hauptanwendung verwendet die Python-Standardbibliothek. Python und das verwe
 ## Quellcodeangebot
 
 Jede App-Version bietet unter `/source.tar.gz` ihren mitgelieferten Quellstand samt Lizenzen, Tests und Builddateien an. Der Link ist unter „Impressum & KI-Hinweis“ erreichbar. Das Archiv basiert ausschließlich auf `SOURCE_FILES.txt`. Kontodaten, Datenbanken, Umgebungsdateien und Geräteschlüssel werden nicht aufgenommen. Änderungen am Produkt müssen auch im Quellcodeangebot enthalten sein.
+
+## Firmware Alpha 0.3
+
+Die neue Firmware verwendet ArduinoJson 7.3.1 und Crypto 0.4.0 unter MIT sowie ESPAsyncWebServer 3.7.6, ESPAsyncTCP 2.0.0 und AsyncTCP 3.4.0 unter LGPL-3.0. Herkunft, Plattformversionen und Wiederaufbau sind in `firmware/DEPENDENCIES.md` dokumentiert. Bestehende Copyright- und Lizenzköpfe werden nicht geändert. Eigener Firmwarecode: AGPL-3.0-only.

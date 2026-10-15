@@ -12,3 +12,6 @@ secrets/
 security-data/
 
 /source.tar.gz
+
+firmware/.pio/
+firmware/data/
