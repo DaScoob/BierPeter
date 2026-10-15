@@ -4,10 +4,11 @@
 #include "Platform.h"
 #include "Portal.h"
 #include "Sealed.h"
+#include "SetupFlow.h"
 #include <ArduinoJson.h>
 
 namespace {
-constexpr char Version[] = "0.3.0-alpha";
+constexpr char Version[] = "0.3.2-alpha";
 constexpr uint32_t Magic = 0x42503033;
 constexpr uint16_t FragmentSize = 180, MaxMessage = 6144;
 struct __attribute__((packed)) Packet {
@@ -63,7 +64,14 @@ uint8_t recipientCount = 0;
 bool configSent[8] = {};
 bool sideStarted[2] = {false, false};
 bool hostLocked = false, managed = false, isDemo = false, realtime = true, serverDirty = false,
-     apRunning = false, configDirty = false;
+     apRunning = false;
+bool onlineEnabled = false, scanWanted = false, scanRunning = false;
+bp::SetupFlow setupFlow;
+uint64_t lastServerAck = 0, lastScan = 0, lastSetupSnapshot = 0;
+String scanJson = "[]", scanError, setupMessage, testedServerVersion;
+String actionId, actionState = "idle", actionError;
+uint32_t webSerial = 0, queuedSerial = 0;
+char *setupSnapshot = nullptr;
 uint64_t nowUs = 0, lastBeacon = 0, lastHeartbeat = 0, lastHttp = 0, lastHop = 0, wifiLost = 0,
          lastReconnect = 0, lastSnapshot = 0, logical = 0;
 uint32_t sequence = 0;
@@ -933,6 +941,24 @@ void httpResponse() {
     }
     return;
   }
+  if (tag == "test-health") {
+    if (ok)
+      testedServerVersion = d["version"].as<String>();
+    setupFlow.health(ok && d["status"].as<String>() == "ok" && d["version"].is<const char *>(),
+                     nowUs);
+    return;
+  }
+  if (tag == "test-auth") {
+    bool accepted = ok && d["status"].as<String>() == "ok" && d["device_id"].as<String>() == id;
+    setupFlow.auth(accepted, status == 401 || status == 403 || status == 503);
+    if (accepted) {
+      lastServerAck = nowUs;
+      setupMessage = "Verbindung geprüft. Serverkommunikation pausiert bis zum Onlinebetrieb.";
+    }
+    return;
+  }
+  if (tag == "heartbeat" && ok && d["device_id"].as<String>() == id)
+    lastServerAck = nowUs;
   if (!ok) {
     serverDirty = true;
     return;
@@ -1027,6 +1053,8 @@ void sealResult() {
 }
 void networkTick() {
   httpResponse();
+  if (!onlineEnabled)
+    return;
   if (http.busy() || WiFi.status() != WL_CONNECTED || deviceKey.length() < 32 ||
       !serverOrigin.length() || nowUs - lastHttp < 180000)
     return;
@@ -1072,22 +1100,48 @@ void networkTick() {
     http.send(serverOrigin, deviceKey, "GET", "/api/v1/relay?device_id=" + id, "", "relay-get");
   }
 }
-void saveConfig() {
+bool saveConfigValues(const String &newSsid, const String &newPassword, const String &origin,
+                      const String &key, bool online) {
   JsonDocument d;
-  d["ssid"] = ssid;
-  d["password"] = password;
-  d["server"] = serverOrigin;
-  d["key"] = deviceKey;
+  d["ssid"] = newSsid;
+  d["password"] = newPassword;
+  d["server"] = origin;
+  d["key"] = key;
+  d["online"] = online;
   File f = LittleFS.open("/config.tmp", "w");
-  if (f) {
-    serializeJson(d, f);
-    f.close();
-    LittleFS.remove("/config.old");
-    if (LittleFS.exists("/config.json"))
-      LittleFS.rename("/config.json", "/config.old");
-    LittleFS.rename("/config.tmp", "/config.json");
+  if (!f)
+    return false;
+  size_t wanted = measureJson(d), written = serializeJson(d, f);
+  f.flush();
+  f.close();
+  if (written != wanted) {
+    LittleFS.remove("/config.tmp");
+    return false;
   }
-  configDirty = false;
+  File verify = LittleFS.open("/config.tmp", "r");
+  JsonDocument saved;
+  bool valid = verify && !deserializeJson(saved, verify) && saved["ssid"].as<String>() == newSsid &&
+               saved["password"].as<String>() == newPassword &&
+               saved["server"].as<String>() == origin && saved["key"].as<String>() == key &&
+               saved["online"].as<bool>() == online;
+  verify.close();
+  if (!valid) {
+    LittleFS.remove("/config.tmp");
+    return false;
+  }
+  bool previous = LittleFS.exists("/config.json");
+  if (previous) {
+    if (LittleFS.exists("/config.old") && !LittleFS.remove("/config.old"))
+      return false;
+    if (!LittleFS.rename("/config.json", "/config.old"))
+      return false;
+  }
+  if (!LittleFS.rename("/config.tmp", "/config.json")) {
+    if (previous)
+      LittleFS.rename("/config.old", "/config.json");
+    return false;
+  }
+  return true;
 }
 void loadConfig() {
   for (const char *name : {"/config.json", "/config.old"}) {
@@ -1101,20 +1155,35 @@ void loadConfig() {
     password = d["password"].as<String>();
     serverOrigin = d["server"].as<String>();
     deviceKey = d["key"].as<String>();
+    onlineEnabled = d["online"] | false;
+    setupFlow.saved();
+    if (onlineEnabled)
+      setupFlow.stage = bp::SetupStage::Online;
     break;
   }
 }
 void startAP() {
   if (apRunning || game.active())
     return;
+  WiFi.mode(WIFI_AP_STA);
+  if (!setupSnapshot) {
+    setupSnapshot = new (std::nothrow) char[4096];
+    if (setupSnapshot)
+      strcpy(setupSnapshot, "{}");
+  }
+  WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1),
+                    IPAddress(255, 255, 255, 0));
   WiFi.softAP(("BierPeter-" + id.substring(6)).c_str(), nullptr, channel, false, 4);
   dns.start(53, "*", WiFi.softAPIP());
   apRunning = true;
+  scanWanted = true;
 }
 void handleWeb() {
   uint8_t kind;
+  uint32_t serial;
   BP_LOCK();
   kind = webKind;
+  serial = queuedSerial;
   BP_UNLOCK();
   if (!kind)
     return;
@@ -1123,39 +1192,142 @@ void handleWeb() {
   request = webRequest;
   webKind = 0;
   BP_UNLOCK();
+  actionId = String(serial);
+  actionState = "error";
+  actionError = "";
   if (runOpen()) {
-    errorText = "Änderung während eines Runs verworfen";
+    actionError = errorText = "Änderung während eines Runs verworfen";
     return;
   }
   JsonDocument d;
-  if (deserializeJson(d, request))
+  if (deserializeJson(d, request)) {
+    actionError = "Ungültiges JSON";
     return;
+  }
   if (kind == 1) {
-    String origin = d["server"].as<String>();
-    if (origin.length() &&
-        (!origin.startsWith("http://") || origin.indexOf('\r') >= 0 || origin.indexOf('\n') >= 0)) {
-      errorText = "Diese Alpha benötigt eine lokale HTTP-Serveradresse";
+    if (setupFlow.busy() || http.busy()) {
+      actionError = "Verbindungsvorgang läuft. Kurz warten.";
       return;
     }
-    String key = d["key"].as<String>();
+    String origin = d["server"].as<String>(), newSsid = d["ssid"].as<String>();
+    origin.trim();
+    while (origin.endsWith("/"))
+      origin.remove(origin.length() - 1);
+    if (origin.length()) {
+      String authority = origin.substring(7);
+      int colon = authority.indexOf(':');
+      String host = colon < 0 ? authority : authority.substring(0, colon);
+      String port = colon < 0 ? "80" : authority.substring(colon + 1);
+      bool validPort = port.length() > 0;
+      for (size_t i = 0; i < port.length(); ++i)
+        if (!isdigit(port[i]))
+          validPort = false;
+      if (!origin.startsWith("http://") || authority.indexOf('/') >= 0 ||
+          authority.indexOf('@') >= 0 || authority.indexOf('?') >= 0 ||
+          authority.indexOf('#') >= 0 || authority.indexOf(' ') >= 0 ||
+          authority.indexOf('\r') >= 0 || authority.indexOf('\n') >= 0 || host == "localhost" ||
+          host == "127.0.0.1" || host == "0.0.0.0" || !host.length() || !validPort ||
+          port.toInt() < 1 || port.toInt() > 65535) {
+        actionError = "Erreichbare lokale Serveradresse als http://Hostname:Port angeben. Kein "
+                      "localhost, HTTPS oder Pfad.";
+        return;
+      }
+    }
+    String key = d["key"].as<String>(), pass = d["password"].as<String>();
+    if (newSsid.length() > 32 || pass.length() > 64 || origin.length() > 180 ||
+        key.length() > 128) {
+      actionError = "Eingabe überschreitet die zulässige Länge.";
+      return;
+    }
     if (key.length() && (key.length() < 32 || key.indexOf('\r') >= 0 || key.indexOf('\n') >= 0)) {
-      errorText = "Geräteschlüssel benötigt mindestens 32 Zeichen";
+      actionError = "Server-Zugriffsschlüssel benötigt mindestens 32 Zeichen.";
       return;
     }
-    ssid = d["ssid"].as<String>();
-    String pass = d["password"].as<String>();
-    if (pass.length())
-      password = pass;
-    if (key.length())
-      deviceKey = key;
+    if (!key.length())
+      key = deviceKey;
+    bool clearPassword = d["clear_password"] | false;
+    if (!pass.length() && !clearPassword) {
+      if (newSsid != ssid && password.length()) {
+        actionError =
+            "Für ein anderes WLAN Passwort eingeben oder ausdrücklich ein offenes WLAN auswählen.";
+        return;
+      }
+      pass = password;
+    }
+    if (!saveConfigValues(newSsid, pass, origin, key, false)) {
+      actionError = "Einstellungen konnten nicht dauerhaft gespeichert werden. Bisherige "
+                    "Konfiguration bleibt erhalten.";
+      return;
+    }
+    ssid = newSsid;
+    password = pass;
     serverOrigin = origin;
-    while (serverOrigin.endsWith("/"))
-      serverOrigin.remove(serverOrigin.length() - 1);
-    configDirty = true;
+    deviceKey = key;
+    onlineEnabled = false;
+    lastServerAck = 0;
+    WiFi.disconnect();
+    setupFlow.saved();
+    setupMessage = "Einstellungen gespeichert. Verbindung jetzt testen.";
+    errorText = "";
+    actionState = "done";
+    return;
+  }
+  if (kind == 3) {
+    if (setupFlow.busy() || scanRunning || http.busy()) {
+      actionError = "Suche oder Verbindung läuft. Kurz warten.";
+      return;
+    }
+    if (!ssid.length() || !serverOrigin.length() || deviceKey.length() < 32) {
+      actionError = "Zuerst WLAN, Serveradresse und Server-Zugriffsschlüssel speichern.";
+      return;
+    }
+    if (!setupFlow.begin(nowUs, runOpen())) {
+      actionError = "Verbindungstest kann momentan nicht starten.";
+      return;
+    }
+    onlineEnabled = false;
+    lastServerAck = 0;
+    setupMessage = "WLAN-Verbindung wird geprüft. Bei kurzer Unterbrechung erneut mit dem "
+                   "BierPeter-WLAN verbinden.";
+    WiFi.disconnect();
+    WiFi.begin(ssid.c_str(), password.c_str());
+    actionState = "done";
+    return;
+  }
+  if (kind == 4) {
+    if (!setupFlow.passed() || WiFi.status() != WL_CONNECTED) {
+      actionError = "Zuerst einen erfolgreichen Verbindungstest mit den gespeicherten "
+                    "Einstellungen durchführen.";
+      return;
+    }
+    if (!saveConfigValues(ssid, password, serverOrigin, deviceKey, true)) {
+      actionError = "Onlinebetrieb konnte nicht gespeichert werden. SoftAP bleibt erreichbar.";
+      return;
+    }
+    if (!setupFlow.online(nowUs, runOpen())) {
+      actionError = "Onlinebetrieb derzeit nicht möglich.";
+      return;
+    }
+    setupMessage = "Onlinebetrieb startet in sechs Sekunden. Danach ins Heimnetz wechseln.";
+    actionState = "done";
+    return;
+  }
+  if (kind == 5) {
+    if (setupFlow.busy() || scanRunning || http.busy()) {
+      actionError = "Suche oder Verbindung läuft. Kurz warten.";
+      return;
+    }
+    scanWanted = true;
+    actionState = "done";
+    return;
   }
   if (kind == 2) {
+    if (setupFlow.busy() || scanRunning) {
+      actionError = "Einrichtung oder WLAN-Suche läuft.";
+      return;
+    }
     if (!isHost()) {
-      errorText = "Aufstellung nur auf dem Host ändern";
+      actionError = errorText = "Aufstellung nur auf dem Host ändern";
       return;
     }
     String select = d["selection"].as<String>(), newMode = d["mode"].as<String>();
@@ -1198,6 +1370,7 @@ void handleWeb() {
     }
     localPrepare();
     announceLocal();
+    actionState = "done";
   }
 }
 void updateSnapshot() {
@@ -1260,9 +1433,165 @@ void updateSnapshot() {
     BP_UNLOCK();
   }
 }
+void updateSetupSnapshot() {
+  if (!setupSnapshot || nowUs - lastSetupSnapshot < 250000)
+    return;
+  lastSetupSnapshot = nowUs;
+  JsonDocument d;
+  d["firmware"] = Version;
+  d["server_version"] = testedServerVersion;
+  d["id"] = id;
+  d["stage"] = bp::setupName(setupFlow.stage);
+  d["revision"] = setupFlow.revision;
+  d["saved"] = setupFlow.revision > 0;
+  d["tested"] = setupFlow.passed();
+  d["busy"] = setupFlow.busy();
+  d["online_enabled"] = onlineEnabled;
+  d["wifi_connected"] = WiFi.status() == WL_CONNECTED;
+  d["server_online"] = onlineEnabled && WiFi.status() == WL_CONNECTED && lastServerAck > 0 &&
+                       nowUs - lastServerAck < 15000000;
+  d["ssid"] = ssid;
+  d["server"] = serverOrigin;
+  d["password_saved"] = password.length() > 0;
+  d["key_saved"] = deviceKey.length() >= 32;
+  d["error"] = setupFlow.error;
+  d["message"] = setupMessage;
+  d["action_id"] = actionId;
+  d["action_state"] = actionState;
+  d["action_error"] = actionError;
+  d["scanning"] = scanRunning || scanWanted;
+  d["scan_error"] = scanError;
+  d["scan_age_s"] = lastScan ? (nowUs - lastScan) / 1000000 : 0;
+  d["run_open"] = runOpen();
+  JsonDocument networks;
+  deserializeJson(networks, scanJson);
+  d["networks"] = networks.as<JsonArray>();
+  String json = serialize(d);
+  if (json.length() < 4096) {
+    BP_LOCK();
+    if (setupSnapshot)
+      memcpy(setupSnapshot, json.c_str(), json.length() + 1);
+    BP_UNLOCK();
+  }
+}
+void setupTick() {
+  if (runOpen()) {
+    if (setupFlow.testing())
+      setupFlow.fail("Verbindungstest wegen eines Runs beendet.");
+    return;
+  }
+  if (scanWanted && !scanRunning && !setupFlow.busy() && apRunning && !http.busy()) {
+    scanWanted = false;
+    scanError = "";
+    WiFi.scanDelete();
+    int result = WiFi.scanNetworks(true, true);
+    scanRunning = result >= -1;
+    if (result == -2)
+      scanError = "WLAN-Suche konnte nicht gestartet werden.";
+  }
+  if (scanRunning) {
+    int count = WiFi.scanComplete();
+    if (count >= 0) {
+      JsonDocument d;
+      auto list = d.to<JsonArray>();
+      // Keep the strongest duplicate SSID and cap the list for ESP8266 memory.
+      int chosen[16];
+      int used = 0;
+      for (int i = 0; i < count; ++i) {
+        String name = WiFi.SSID(i);
+        if (!name.length())
+          continue;
+        int duplicate = -1;
+        for (int j = 0; j < used; ++j)
+          if (WiFi.SSID(chosen[j]) == name)
+            duplicate = j;
+        if (duplicate >= 0) {
+          if (WiFi.RSSI(i) > WiFi.RSSI(chosen[duplicate]))
+            chosen[duplicate] = i;
+          continue;
+        }
+        if (used < 16)
+          chosen[used++] = i;
+        else {
+          int weakest = 0;
+          for (int j = 1; j < used; ++j)
+            if (WiFi.RSSI(chosen[j]) < WiFi.RSSI(chosen[weakest]))
+              weakest = j;
+          if (WiFi.RSSI(i) > WiFi.RSSI(chosen[weakest]))
+            chosen[weakest] = i;
+        }
+      }
+      for (int i = 0; i < used; ++i)
+        for (int j = i + 1; j < used; ++j)
+          if (WiFi.RSSI(chosen[j]) > WiFi.RSSI(chosen[i])) {
+            int tmp = chosen[i];
+            chosen[i] = chosen[j];
+            chosen[j] = tmp;
+          }
+      for (int j = 0; j < used; ++j) {
+        int i = chosen[j];
+        auto n = list.add<JsonObject>();
+        n["ssid"] = WiFi.SSID(i);
+        n["rssi"] = WiFi.RSSI(i);
+        n["channel"] = WiFi.channel(i);
+#ifdef ESP32
+        n["open"] = WiFi.encryptionType(i) == WIFI_AUTH_OPEN;
+#else
+        n["open"] = WiFi.encryptionType(i) == ENC_TYPE_NONE;
+#endif
+      }
+      scanJson = serialize(d);
+      WiFi.scanDelete();
+      scanRunning = false;
+      lastScan = nowUs;
+    } else if (count == -2) {
+      scanRunning = false;
+      scanError = "WLAN-Suche fehlgeschlagen. Erneut suchen.";
+    }
+  }
+  if (setupFlow.stage == bp::SetupStage::Wifi)
+    setupFlow.wifi(WiFi.status() == WL_CONNECTED, nowUs);
+  if (setupFlow.stage == bp::SetupStage::Health && !http.busy())
+    http.send(serverOrigin, "", "GET", "/api/v1/health", "", "test-health");
+  if (setupFlow.stage == bp::SetupStage::Auth && !http.busy()) {
+    JsonDocument d;
+    heartbeat(d);
+    http.send(serverOrigin, deviceKey, "POST", "/api/v1/heartbeat", serialize(d), "test-auth");
+  }
+  setupFlow.tick(nowUs, runOpen());
+  if (setupFlow.switchDue(nowUs)) {
+    onlineEnabled = true;
+    dns.stop();
+    WiFi.softAPdisconnect(true);
+    WiFi.mode(WIFI_STA);
+    apRunning = false;
+    lastHeartbeat = 0;
+    BP_LOCK();
+    char *previous = setupSnapshot;
+    setupSnapshot = nullptr;
+    BP_UNLOCK();
+    delete[] previous;
+  }
+}
 void portalSetup() {
   snapshot = new char[4096];
   strcpy(snapshot, "{}");
+  portal.on("/setup", HTTP_GET, [](AsyncWebServerRequest *r) {
+    if (r->client()->localIP() != WiFi.softAPIP()) {
+      r->send(403);
+      return;
+    }
+    char *copy = new (std::nothrow) char[4096];
+    if (!copy) {
+      r->send(503);
+      return;
+    }
+    BP_LOCK();
+    strcpy(copy, setupSnapshot ? setupSnapshot : "{}");
+    BP_UNLOCK();
+    r->send(200, "application/json", copy);
+    delete[] copy;
+  });
   portal.on("/status", HTTP_GET, [](AsyncWebServerRequest *r) {
     if (r->client()->localIP() != WiFi.softAPIP()) {
       r->send(403);
@@ -1290,7 +1619,7 @@ void portalSetup() {
     r->send(200, "text/html; charset=utf-8", PortalPage);
 #endif
   });
-  for (const char *path : {"/config", "/session"})
+  for (const char *path : {"/config", "/session", "/test", "/online", "/scan"})
     portal.on(
         path, HTTP_POST, [](AsyncWebServerRequest *r) {}, nullptr,
         [](AsyncWebServerRequest *r, uint8_t *data, size_t len, size_t index, size_t total) {
@@ -1308,23 +1637,62 @@ void portalSetup() {
                     "{\"error\":\"Lokaler Anfrageursprung erforderlich\"}");
             return;
           }
-          if (index || len != total || total >= sizeof(webRequest)) {
-            r->send(413, "application/json", "{\"error\":\"Anfrage zu groß oder fragmentiert\"}");
+          if (total == 0 || total >= sizeof(webRequest)) {
+            r->send(413, "application/json", "{\"error\":\"Anfrage zu groß\"}");
             return;
           }
+          if (index == 0) {
+            r->_tempObject = calloc(1, total + 1);
+            if (!r->_tempObject) {
+              r->send(503);
+              return;
+            }
+          }
+          if (!r->_tempObject || index + len > total) {
+            r->send(400);
+            return;
+          }
+          memcpy(static_cast<char *>(r->_tempObject) + index, data, len);
+          if (index + len != total)
+            return;
           BP_LOCK();
           bool busy = webKind != 0;
+          uint32_t serial = 0;
           if (!busy) {
-            memcpy(webRequest, data, len);
-            webRequest[len] = 0;
-            webKind = r->url() == "/config" ? 1 : 2;
+            memcpy(webRequest, r->_tempObject, total);
+            webRequest[total] = 0;
+            queuedSerial = serial = ++webSerial;
+            webKind = r->url() == "/config"    ? 1
+                      : r->url() == "/session" ? 2
+                      : r->url() == "/test"    ? 3
+                      : r->url() == "/online"  ? 4
+                                               : 5;
           }
           BP_UNLOCK();
-          r->send(busy ? 409 : 202, "application/json",
-                  busy ? "{\"error\":\"Anfrage wartet\"}"
-                       : "{\"message\":\"Anfrage übernommen; Status prüfen\"}");
+          free(r->_tempObject);
+          r->_tempObject = nullptr;
+          if (busy) {
+            r->send(409, "application/json", "{\"error\":\"Anfrage wartet\"}");
+            return;
+          }
+          r->send(202, "application/json", "{\"request\":\"" + String(serial) + "\"}");
         });
-  portal.onNotFound([](AsyncWebServerRequest *r) { r->redirect("/"); });
+  auto captive = [](AsyncWebServerRequest *r) {
+    if (r->client()->localIP() != WiFi.softAPIP()) {
+      r->send(403);
+      return;
+    }
+    auto *response =
+        r->beginResponse(302, "text/plain", "BierPeter Einrichtung: http://192.168.4.1/");
+    response->addHeader("Location", "http://192.168.4.1/");
+    response->addHeader("Cache-Control", "no-store");
+    r->send(response);
+  };
+  for (const char *path :
+       {"/generate_204", "/gen_204", "/hotspot-detect.html", "/library/test/success.html",
+        "/connecttest.txt", "/ncsi.txt", "/redirect", "/success.txt"})
+    portal.on(path, HTTP_GET, captive);
+  portal.onNotFound(captive);
   portal.begin();
 }
 void wifiTick() {
@@ -1338,14 +1706,9 @@ void wifiTick() {
     return;
   if (!apRunning && (!ssid.length() || (wifiLost && nowUs - wifiLost > 30000000)))
     startAP();
-  if (configDirty) {
-    saveConfig();
-    WiFi.disconnect();
-    if (ssid.length())
-      WiFi.begin(ssid.c_str(), password.c_str());
-    lastReconnect = nowUs;
-  }
-  if (!connected && ssid.length() && nowUs - lastReconnect > 30000000 && !runOpen()) {
+  if (onlineEnabled && !connected && ssid.length() && nowUs - lastReconnect > 30000000 &&
+      !runOpen() && !scanRunning && !setupFlow.busy() &&
+      (!apRunning || WiFi.softAPgetStationNum() == 0)) {
     WiFi.begin(ssid.c_str(), password.c_str());
     lastReconnect = nowUs;
   }
@@ -1353,7 +1716,9 @@ void wifiTick() {
   for (int i = 0; i < peerCount; ++i)
     if (peers[i].admitted && peers[i].id != id)
       group = true;
-  if (!connected && !group && !runOpen() && nowUs - lastHop > (channel == 11 ? 2000000 : 300000)) {
+  if (!connected && !group && !runOpen() && !setupFlow.busy() && !scanRunning &&
+      (!apRunning || WiFi.softAPgetStationNum() == 0) &&
+      nowUs - lastHop > (channel == 11 ? 2000000 : 300000)) {
     lastHop = nowUs;
     channel = ++hop % 12;
     if (!channel)
@@ -1399,6 +1764,8 @@ void setup() {
   }
   clean(identity, 32);
   loadConfig();
+  if (onlineEnabled)
+    WiFi.mode(WIFI_STA);
   radioChannel(11);
   esp_now_init();
 #ifdef ESP8266
@@ -1414,9 +1781,10 @@ void setup() {
   localPrepare();
   http.begin();
   portalSetup();
-  if (ssid.length())
+  if (onlineEnabled && ssid.length())
     WiFi.begin(ssid.c_str(), password.c_str());
-  startAP();
+  else
+    startAP();
   Serial.println("BierPeter " + id + " · " + Version);
 }
 void loop() {
@@ -1429,6 +1797,7 @@ void loop() {
   sealResult();
   handleWeb();
   wifiTick();
+  setupTick();
   if (nowUs - lastBeacon > 500000) {
     lastBeacon = nowUs;
     fireBeacon();
@@ -1436,5 +1805,6 @@ void loop() {
   if (apRunning)
     dns.processNextRequest();
   updateSnapshot();
+  updateSetupSnapshot();
   yield();
 }

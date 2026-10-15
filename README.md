@@ -2,6 +2,10 @@
 
 Lokale Web-App mit gemeinsamer Session-Lobby, kontexterhaltenden Geräte-/Einladungslinks und einer Anbindung an das vorhandene ESP-Testfirmware-Protokoll.
 
+## Firmware Alpha 0.3.2
+
+Die lokale Einrichtung unterstützt WLAN-Auswahl, bestätigtes Speichern, einen gestuften Verbindungstest und einen ausdrücklich bestätigten Wechsel vom SoftAP in den Onlinebetrieb. Server und Web-App bleiben auf 0.3.1. Details: [docs/FIRMWARE_032.md](docs/FIRMWARE_032.md).
+
 ## Neu in 0.3.1: Firmware Alpha 0.3
 
 Gemeinsame Firmware für ESP8266, ESP32 und ESP32-S3 unter [firmware/](firmware/README.md): lokale 1vs1-/Staffellogik, ESP-NOW-Gerätesuche, SoftAP-Konfiguration und lokale Statusansicht. Servergesteuerte Demos verwenden virtuelle Sensoren auf den Geräten. Messergebnisse und serververmittelte Gerätepakete werden vor dem Upload verschlüsselt und erst im Browser gelesen. Demo-Ergebnisse werden getrennt angezeigt.

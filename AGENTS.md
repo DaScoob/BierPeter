@@ -44,3 +44,11 @@
 - Freeze roster/channel during a run; no automatic game timeout, no time penalty, no persistent offline history.
 - Validate native engine/embedded-crypto interoperability with python3 firmware/test/check-native.py, API tests, node tests/ui-firmware.cjs and all three PlatformIO targets.
 - Physical radio, timing and RAM tests must be reported separately from native simulations and successful builds.
+
+## Firmware Alpha 0.3.2
+- Save, test and online handoff are distinct explicit actions. HTTP 202 only confirms queueing, not storage success.
+- Never send saved PSK or server API key back to portal JavaScript. New settings invalidate successful tests.
+- Pause hopping while a phone uses the SoftAP. Scan asynchronously, outside prepared/running races.
+- Health alone is insufficient; test actual authenticated heartbeat. Do not poll game commands in provisioning mode.
+- Keep portal available on failed tests. Online handoff requires explicit confirmation and a visible local-network/server-link explanation.
+- Edit firmware/portal.html, regenerate include/Portal.h with firmware/embed-portal.py. Validate actual portal DOM with tests/portal-alpha032.cjs and portable SetupFlow with firmware/test/setup.cpp.

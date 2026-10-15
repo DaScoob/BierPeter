@@ -62,3 +62,9 @@
 - Server-triggered real-time or accelerated demos, encrypted server fallback between devices and recipient-specific encrypted results displayed in the existing lobby.
 - Persistent device configuration/identity, volatile sessions/results, bounded reconnect buffers, no race timeout or penalties.
 - Browser-generated X25519 keys in the existing encrypted vault, HKDF-SHA-256/AES-256-GCM interoperability checks, device-key pinning and separate demo presentation.
+
+## Firmware 0.3.2-alpha (Server/Web-App unchanged at 0.3.1)
+- Guided SoftAP setup with async WLAN selection, stored SSID/server prefill and clear server API key explanation.
+- Confirmed persistent saves, staged WLAN/server/authentication test and explicit online handoff before shutting down SoftAP.
+- Separate live setup status, short-outage recovery, stale-test invalidation, captive probe redirects and no channel hopping while portal clients are connected.
+- Compact firmware/script/source-patch delivery without a new Git bundle.

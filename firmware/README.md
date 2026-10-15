@@ -81,3 +81,9 @@ Weitere Angaben und Hardware-Abnahme: `docs/FIRMWARE_030.md` und `docs/VALIDATIO
 ## Vorabkonfiguration für fabrikneue Geräte
 
 `config.example.json` beschreibt das Konfigurationsformat. Eine vorab angepasste Datei kann bei der erstmaligen Provisionierung als `firmware/data/config.json` in ein LittleFS-Abbild aufgenommen werden. Dieses Verzeichnis ist vom Git-Upload ausgeschlossen. Ein Dateisystem-Upload überschreibt den bestehenden Dateisystembereich und ist deshalb ausschließlich für diese Ersteinrichtung geeignet. Reguläre Updates verwenden nur `FLASH.sh` beziehungsweise das PlatformIO-Ziel `upload`.
+
+## Firmware 0.3.2: neuer Einrichtungsablauf
+
+WLAN aus der Liste auswählen, Einstellungen speichern, Verbindung testen und erst anschließend den Onlinebetrieb bestätigen. Nach der Bestätigung wird der SoftAP abgeschaltet. Die vorhandenen WLAN-Daten und die Geräteidentität bleiben beim regulären Firmware-Upload erhalten. Der Server bleibt bei Version 0.3.1. Vollständiger Ablauf und Testgrenzen: [docs/FIRMWARE_032.md](../docs/FIRMWARE_032.md).
+
+Die im Abschnitt „Einrichtung“ genannten Felder heißen jetzt ausdrücklich „Server-Zugriffsschlüssel“ und „Serveradresse“. `DEVICE_API_KEY` ist nicht der öffentliche Geräteschlüssel. Ohne ausdrücklich gestarteten Onlinebetrieb werden keine normalen Serverbefehle abgeholt. Bereits gespeicherte Zugangsdaten werden bei der Migration übernommen; das neue Verfahren verlangt vor dem ersten Onlinewechsel einen Verbindungstest.
