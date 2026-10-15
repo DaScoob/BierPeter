@@ -27,7 +27,7 @@ class Fixture(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory()
         app.DB=Path(self.tmp.name)/'db.sqlite3';app.AUTH_ATTEMPTS.clear();app.init()
-        self.server=ThreadingHTTPServer(('127.0.0.1',0),app.Handler)
+        self.server=app.Server(('127.0.0.1',0),app.Handler)
         self.thread=threading.Thread(target=self.server.serve_forever,daemon=True);self.thread.start()
         base='http://127.0.0.1:'+str(self.server.server_port)+'/api'
         self.h,self.g,self.o=[Client(base) for _ in range(3)]

@@ -22,3 +22,9 @@
 - Current lobby data is still legacy plaintext. Never claim full E2EE or transparent group-name sharing until the separate security prototype is evaluated and integrated.
 - Statistics must reflect actual scored results only; empty widgets must not be filled with sample results.
 - Validate: node tests/ui-alpha021.cjs; optional security dependencies are separate from the standard app.
+
+## Alpha 0.2.2
+- Eigener Code: AGPL-3.0-only. Fremdkomponenten und Lizenzköpfe erhalten; Quellcodeangebot und SOURCE_FILES.txt aktuell halten.
+- Namen nur als pro Empfänger verschlüsselte Umschläge teilen. Öffentliche Erstidentitäten sind ohne unabhängigen Vergleich nicht serverunabhängig verifiziert.
+- Lokale Gerätefunde nur aus tatsächlichen Peer-/Nachbarmeldungen ableiten. Keine globale Server-Geräteliste als lokale Suche ausgeben.
+- Zusätzlich validieren: node tests/ui-alpha022.cjs und node tests/qr-roundtrip.cjs.

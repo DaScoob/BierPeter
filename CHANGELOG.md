@@ -1,5 +1,17 @@
 # Änderungen
 
+## 0.2.2-alpha · 2026-10-15
+
+- Standard-QR für Einladungen; lokaler Kamera-/Foto-Scan für Geräte.
+- Session-Löschung durch den Host, mit Erhalt persönlicher Daten.
+- Verschlüsselte Namensfreigabe pro zugelassenem Empfänger, gebunden an Session und Konten; Schlüsselabdrücke und Erkennung nachträglichen Schlüsseltauschs.
+- Frische Gerätefunde aus tatsächlichen aktiven Peers und optionalen Nachbarlisten. Keine neue Suchfirmware oder erfundene Erkennung.
+- Race-Formulare und Positionsauswahl an feste Race-ID gebunden; atomare persönliche Gerätelöschung; konsistente SQLite-Lesesnapshots.
+- Staffel-Startgerät aus tatsächlich besetzter Aufstellung; URL-Prüfung und Anmeldung hinter gemeinsamer IP korrigiert.
+- WAL, Indizes und größere Server-Warteschlange; Passwortberechnung außerhalb globaler Schreibsperre.
+- AGPL-3.0-only, lokale QR-Abhängigkeiten samt MIT-/Apache-2.0-Hinweisen und Quellcodeangebot.
+
+
 ## 0.2.1-alpha · 2026-10-15
 
 - Gemeinsame aktive Spielrunde, Modusprüfung, Race-Bearbeitung und Löschung.

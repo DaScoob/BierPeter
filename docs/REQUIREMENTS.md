@@ -17,6 +17,10 @@ Die jüngsten Entscheidungen des Auftraggebers ersetzen frühere widersprechende
 - Training gegen eigene Bestzeit; App löst akustischen Countdown am Gerät aus. Anstoßen entfällt.
 - Ereignisse lokal messen und puffern; Zeitbasis abgleichen; verspätete und doppelte Übertragung darf Messergebnis nicht verfälschen.
 - Selbsthosting, konfigurierbare Serveradresse, spätere JSON-Datenportabilität.
-- Datensparsamkeit; konkrete Löschfristen, Auth-Wiederherstellung, Sichtbarkeit von Ergebnissen und Open-Source-Lizenz bleiben vor öffentlicher Produktfreigabe zu klären.
+- Datensparsamkeit; konkrete Löschfristen, Auth-Wiederherstellung, Sichtbarkeit von Ergebnissen bleiben vor öffentlicher Produktfreigabe zu klären.
 
 Alpha 0.1 implementiert nur Konten, Session-Verwaltung und Race-Vorbereitung. Die im Text beschriebenen Hardware- und Ergebnisfunktionen sind Anforderungen für nachfolgende Arbeit.
+
+## Ergänzung 0.2.2
+
+Die Open-Source-Entscheidung ist getroffen: AGPL-3.0-only. Die zusammengeführte Änderungsagenda und Grenzen der Umsetzung sind in ALPHA_022.md dokumentiert.

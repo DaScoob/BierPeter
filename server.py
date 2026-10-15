@@ -9,6 +9,9 @@ import secrets
 import sqlite3
 import time
 import threading
+import ipaddress
+import importlib.util
+from contextlib import nullcontext
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -19,9 +22,10 @@ DB = Path(os.environ.get('BIERPETER_DB', str(ROOT / 'data/bierpeter.sqlite3')))
 SECURE = os.environ.get('BIERPETER_SECURE_COOKIE', '0') == '1'
 TTL = 12 * 3600
 ONLINE_WINDOW = 15
-VERSION = '0.2.1-alpha'
+VERSION = '0.2.2-alpha'
 AUTH_ATTEMPTS = {}
 AUTH_LOCK = threading.Lock()
+WRITE_LOCK = threading.Lock()
 MODES = {'duel', 'relay', 'marathon', 'general', 'olympics', 'training'}
 
 
@@ -43,6 +47,7 @@ def connect():
 def init():
     DB.parent.mkdir(parents=True, exist_ok=True)
     with connect() as c:
+        c.execute('PRAGMA journal_mode=WAL')
         c.executescript('''
         CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,name TEXT UNIQUE COLLATE NOCASE,password TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS logins(token TEXT PRIMARY KEY,user_id TEXT REFERENCES users(id),expires INTEGER);
@@ -56,17 +61,25 @@ def init():
         CREATE TABLE IF NOT EXISTS hardware_events(id INTEGER PRIMARY KEY,device TEXT,type TEXT,details TEXT,received REAL);
         CREATE TABLE IF NOT EXISTS hardware_commands(id TEXT PRIMARY KEY,device TEXT,action TEXT,peer_mac TEXT,state TEXT,detail TEXT,created REAL);
         CREATE TABLE IF NOT EXISTS slots(race TEXT REFERENCES races(id),device TEXT,side INTEGER CHECK(side IN (0,1)),user TEXT REFERENCES users(id),PRIMARY KEY(race,device,side),UNIQUE(race,user));
+        CREATE TABLE IF NOT EXISTS public_identities(user TEXT PRIMARY KEY REFERENCES users(id),jwk TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS shared_names(session TEXT REFERENCES sessions(id),provider TEXT REFERENCES users(id),recipient TEXT REFERENCES users(id),revision INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(session,provider,recipient));
+        CREATE TABLE IF NOT EXISTS discoveries(observer TEXT,device TEXT,transport TEXT,channel INTEGER,rssi INTEGER,seen REAL,PRIMARY KEY(observer,device,transport));
+        CREATE INDEX IF NOT EXISTS races_session ON races(session);
+        CREATE INDEX IF NOT EXISTS members_user ON members(user);
+        CREATE INDEX IF NOT EXISTS commands_device ON hardware_commands(device,state);
         ''')
         for table, column, declaration in (
             ('sessions', 'active_race', 'TEXT'),
             ('sessions', 'public_url', "TEXT NOT NULL DEFAULT ''"),
             ('devices', 'position', 'INTEGER NOT NULL DEFAULT 0'),
             ('devices', 'provider', 'TEXT'),
+            ('hardware_commands', 'session', 'TEXT'),
         ):
             if column not in [r['name'] for r in c.execute('PRAGMA table_info(' + table + ')')]:
                 c.execute('ALTER TABLE ' + table + ' ADD COLUMN ' + column + ' ' + declaration)
         # Preserve the previously displayed sequence as the initial explicit order.
         for row in c.execute('SELECT id FROM sessions'):
+            c.execute('UPDATE devices SET provider=(SELECT host FROM sessions WHERE id=?) WHERE session=? AND provider IS NULL',(row['id'],row['id']))
             for index, d in enumerate(c.execute('SELECT id FROM devices WHERE session=? ORDER BY position,id', (row['id'],)).fetchall()):
                 c.execute('UPDATE devices SET position=? WHERE session=? AND id=?', (index, row['id'], d['id']))
             if not c.execute('SELECT active_race FROM sessions WHERE id=?', (row['id'],)).fetchone()['active_race']:
@@ -93,14 +106,24 @@ def lineup_issues(c, race):
 
 
 def public_url(value):
-    if not isinstance(value, str) or len(value) > 300:
+    if not isinstance(value, str) or len(value) > 300 or re.search(r'[\s\\]',value):
         raise Error(400, 'Ungültige Einladungsadresse')
     if not value:
         return ''
-    parts = urlsplit(value)
+    try:
+        parts = urlsplit(value)
+        host = (parts.hostname or '').rstrip('.').lower()
+        parts.port
+    except ValueError:
+        raise Error(400, 'Ungültige Serveradresse oder Port')
     if parts.scheme not in ('http', 'https') or not parts.hostname or parts.username or parts.password or parts.query or parts.fragment or parts.path not in ('', '/'):
         raise Error(400, 'Basisadresse benötigt http(s)://Hostname:Port ohne Pfad')
-    if parts.hostname in ('localhost','127.0.0.1','::1'):
+    try:
+        address = ipaddress.ip_address(host)
+        invalid = address.is_loopback or address.is_unspecified or address.is_multicast or (address.version == 6 and address.ipv4_mapped and (address.ipv4_mapped.is_loopback or address.ipv4_mapped.is_unspecified))
+    except ValueError:
+        invalid = host == 'localhost' or host.endswith('.localhost') or bool(re.fullmatch(r'(?:0x[0-9a-f]+|[0-9]+)(?:\.(?:0x[0-9a-f]+|[0-9]+))*', host))
+    if invalid:
         raise Error(400, 'Für andere Geräte eine erreichbare LAN-IP oder Domain verwenden')
     try:
         parts.port
@@ -153,6 +176,34 @@ def text(data, key, maximum=80):
     return value.strip()
 
 
+def envelope(value):
+    if not isinstance(value, dict) or set(value) != {'v','alg','iv','ciphertext'} or value.get('v') != 1 or value.get('alg') != 'A256GCM':
+        raise Error(400, 'Gültiger verschlüsselter Umschlag erforderlich')
+    try:
+        iv = base64.b64decode(value['iv'], validate=True)
+        cipher = base64.b64decode(value['ciphertext'], validate=True)
+    except (ValueError, TypeError, KeyError):
+        raise Error(400, 'Ungültige Verschlüsselungsdaten')
+    if len(iv) != 12 or not 16 <= len(cipher) <= 196608:
+        raise Error(400, 'Ungültige Verschlüsselungsgröße')
+    return value
+
+
+def save_vault(c, user, data):
+    row = c.execute('SELECT revision FROM private_vaults WHERE user=?', (user,)).fetchone()
+    if type(data.get('revision')) is not int or data['revision'] != (row['revision'] if row else 0):
+        raise Error(409, 'Private Daten wurden in einem anderen Fenster geändert; neu entsperren')
+    sealed = envelope(data.get('envelope'))
+    revision = data['revision'] + 1
+    c.execute('INSERT INTO private_vaults VALUES(?,?,?) ON CONFLICT(user) DO UPDATE SET revision=excluded.revision,payload=excluded.payload', (user, revision, json.dumps(sealed)))
+    return {'revision': revision}
+
+
+class Server(ThreadingHTTPServer):
+    request_queue_size = 64
+    daemon_threads = True
+
+
 class Error(Exception):
     def __init__(self, status, message):
         self.status, self.message = status, message
@@ -177,13 +228,37 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Cache-Control', 'no-store')
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.send_header('Referrer-Policy', 'no-referrer')
-        self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+        self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+        self.send_header('Permissions-Policy', 'camera=(self), microphone=(), geolocation=()')
 
     def do_GET(self):
         path = urlsplit(self.path).path
         if path.startswith('/api/'):
             return self.handle_api('GET', path, {})
-        names = {'/': 'index.html', '/app.js': 'app.js', '/vault.js': 'vault.js', '/style.css': 'style.css'}
+        if path == '/source.tar.gz':
+            source = ROOT / 'source.tar.gz'
+            if source.is_file():
+                body = source.read_bytes()
+            else:
+                spec = importlib.util.spec_from_file_location('build_source', ROOT / 'build-source.py')
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                import tempfile
+                with tempfile.TemporaryDirectory() as directory:
+                    output = Path(directory) / 'source.tar.gz'
+                    module.build(output)
+                    body = output.read_bytes()
+            self.send_response(200)
+            self.headers_common()
+            self.send_header('Content-Type','application/gzip')
+            self.send_header('Content-Disposition','attachment; filename="BierPeter-0.2.2-source.tar.gz"')
+            self.send_header('Content-Length',str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        names = {'/': 'index.html', '/app.js': 'app.js', '/vault.js': 'vault.js', '/sharing.js':'sharing.js', '/qr.js':'qr.js', '/style.css': 'style.css'}
+        for name in ('qrcodegen.js','qr-scanner.umd.min.js','qr-scanner-worker.min.js'):
+            names['/vendor/'+name] = 'vendor/'+name
         if path not in names:
             return self.reply(404, {'error': 'Nicht gefunden'})
         file = ROOT / 'web' / names[path]
@@ -200,7 +275,7 @@ class Handler(BaseHTTPRequestHandler):
             if not urlsplit(self.path).path.startswith('/api/v1/') and self.headers.get('X-BierPeter-Request') != '1':
                 raise Error(403, 'Ungültiger Anfrageursprung')
             size = int(self.headers.get('Content-Length', '0'))
-            if size <= 0 or size > (262144 if urlsplit(self.path).path == '/api/account/vault' else 16384):
+            if size <= 0 or size > (262144 if urlsplit(self.path).path in ('/api/account/vault','/api/account/devices') or self.path.endswith('/names') else 16384):
                 raise Error(400, 'Ungültige Anfragegröße')
             if not self.headers.get('Content-Type', '').startswith('application/json'):
                 raise Error(415, 'JSON erforderlich')
@@ -238,10 +313,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def handle_api(self, method, path, d):
         try:
-            with connect() as c:
-                if method == 'POST':
-                    c.execute('BEGIN IMMEDIATE')
-                value, cookie = self.api(c, method, path, d)
+            writing = method == 'POST' and path not in ('/api/register','/api/login')
+            # SQLite has one writer. Queue in-process writes instead of letting
+            # many connections compete through SQLite's busy-retry backoff.
+            with WRITE_LOCK if writing else nullcontext():
+                with connect() as c:
+                    if writing:
+                        c.execute('BEGIN IMMEDIATE')
+                    elif method == 'GET':
+                        c.execute('BEGIN')  # One consistent snapshot for the complete response.
+                    value, cookie = self.api(c, method, path, d)
             self.reply(200, value, cookie)
         except Error as e:
             self.reply(e.status, {'error': e.message})
@@ -271,6 +352,21 @@ class Handler(BaseHTTPRequestHandler):
                 raise Error(400, 'Ungültige Peer-MAC')
             if type(d.get('peer_active', False)) is not bool:
                 raise Error(400, 'Ungültiger Peer-Status')
+            neighbors = d.get('neighbors', [])
+            if not isinstance(neighbors,list) or len(neighbors)>32:
+                raise Error(400, 'Ungültige Nachbarliste')
+            found = []
+            for neighbor in neighbors:
+                if not isinstance(neighbor,dict):
+                    raise Error(400, 'Ungültiger Nachbar')
+                nid = device_id(neighbor.get('device_id'))
+                transport = neighbor.get('transport')
+                channel, rssi = neighbor.get('channel'), neighbor.get('rssi')
+                if not re.fullmatch(r'[0-9A-F]{12}',nid) or nid==ident or transport not in ('esp-now','wifi') or type(channel) is not int or not 1<=channel<=14 or (rssi is not None and (type(rssi) is not int or not -150<=rssi<=0)):
+                    raise Error(400, 'Ungültige Nachbarmeldung')
+                found.append((ident,nid,transport,channel,rssi,time.time()))
+            c.execute('DELETE FROM discoveries WHERE observer=? OR seen<?',(ident,time.time()-ONLINE_WINDOW))
+            c.executemany('INSERT OR REPLACE INTO discoveries VALUES(?,?,?,?,?,?)',found)
             c.execute('INSERT INTO hardware VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET firmware=excluded.firmware,wifi_rssi=excluded.wifi_rssi,wifi_channel=excluded.wifi_channel,uptime_ms=excluded.uptime_ms,peer_mac=excluded.peer_mac,peer_active=excluded.peer_active,last_seen=excluded.last_seen', (ident, firmware, d['wifi_rssi'], d['wifi_channel'], d['uptime_ms'], peer, int(bool(peer and d.get('peer_active', False))), time.time()))
             return {'status': 'ok', 'device_id': ident}
         if path == '/api/v1/events' and method == 'POST':
@@ -316,27 +412,36 @@ class Handler(BaseHTTPRequestHandler):
             return self.hardware_api(c, method, path, d), None
         if path in ('/api/register', '/api/login') and method == 'POST':
             name, pw = text(d, 'name', 40), text(d, 'password', 128)
+            now = time.monotonic()
+            keys = [('account', name.casefold()), ('ip', self.client_address[0])]
+            if path.endswith('register'):
+                keys = [('register', self.client_address[0])]
             with AUTH_LOCK:
-                now = time.monotonic()
-                key = self.client_address[0]
-                # Expire old entries to bound retained state.
                 for old in list(AUTH_ATTEMPTS):
                     if AUTH_ATTEMPTS[old][0] < now - 60:
                         del AUTH_ATTEMPTS[old]
-                start, count = AUTH_ATTEMPTS.get(key, (now, 0))
-                if count >= 20:
-                    raise Error(429, 'Zu viele Anmeldeversuche; nach einer Minute erneut versuchen')
-                AUTH_ATTEMPTS[key] = (start, count + 1)
+                if any(AUTH_ATTEMPTS.get(k,(now,0))[1] >= (200 if k[0]=='ip' else 20) for k in keys):
+                    raise Error(429, 'Zu viele fehlgeschlagene Versuche; nach einer Minute erneut versuchen')
             if path.endswith('register'):
                 if len(pw) < 12:
                     raise Error(400, 'Passwort benötigt mindestens 12 Zeichen')
+                with AUTH_LOCK:
+                    start, count = AUTH_ATTEMPTS.get(keys[0], (now,0))
+                    AUTH_ATTEMPTS[keys[0]] = (start,count+1)
                 c.execute('INSERT INTO users VALUES(?,?,?)', (secrets.token_hex(12), name, password_hash(pw)))
-            u = c.execute('SELECT * FROM users WHERE name=?', (name,)).fetchone()
-            # Constant-cost hashing also for unknown accounts.
-            salt = u['password'].split(':')[0] if u else '0' * 32
-            candidate = password_hash(pw, salt)
-            if not u or not hmac.compare_digest(candidate, u['password']):
-                raise Error(401, 'Anmeldung nicht möglich')
+                u = c.execute('SELECT * FROM users WHERE name=?', (name,)).fetchone()
+            else:
+                u = c.execute('SELECT * FROM users WHERE name=?', (name,)).fetchone()
+                salt = u['password'].split(':')[0] if u else '0' * 32
+                candidate = password_hash(pw, salt)
+                if not u or not hmac.compare_digest(candidate, u['password']):
+                    with AUTH_LOCK:
+                        for k in keys:
+                            start, count = AUTH_ATTEMPTS.get(k, (now,0))
+                            AUTH_ATTEMPTS[k] = (start,count+1)
+                    raise Error(401, 'Anmeldung nicht möglich')
+                with AUTH_LOCK:
+                    AUTH_ATTEMPTS.pop(keys[0], None)
             token = secrets.token_urlsafe(32)
             c.execute('DELETE FROM logins WHERE expires<?', (time.time(),))
             c.execute('INSERT INTO logins VALUES(?,?,?)', (hashlib.sha256(token.encode()).hexdigest(), u['id'], time.time() + TTL))
@@ -353,30 +458,32 @@ class Handler(BaseHTTPRequestHandler):
             if method == 'GET':
                 return [hardware_status(c, x['device']) for x in c.execute('SELECT device FROM managed_devices WHERE user=? ORDER BY device', (u['id'],))], None
             ident = device_id(d.get('device'))
+            result = {}
             if d.get('action') == 'delete':
+                has_vault = c.execute('SELECT 1 FROM private_vaults WHERE user=?',(u['id'],)).fetchone()
+                if has_vault:
+                    if not isinstance(d.get('vault'),dict):
+                        raise Error(409, 'Private Daten zuerst entsperren')
+                    result = save_vault(c, u['id'], d['vault'])
                 c.execute('DELETE FROM managed_devices WHERE user=? AND device=?', (u['id'], ident))
             else:
                 c.execute('INSERT OR IGNORE INTO managed_devices VALUES(?,?)', (u['id'], ident))
-            return {}, None
+            return result, None
         if path == '/api/account/vault':
             row = c.execute('SELECT * FROM private_vaults WHERE user=?', (u['id'],)).fetchone()
             if method == 'GET':
                 return {'revision':row['revision'] if row else 0,'envelope':json.loads(row['payload']) if row else None}, None
-            if type(d.get('revision')) is not int or d['revision'] != (row['revision'] if row else 0):
-                raise Error(409, 'Private Daten wurden in einem anderen Fenster geändert; neu entsperren')
-            envelope = d.get('envelope')
-            if not isinstance(envelope,dict) or set(envelope)!={'v','alg','iv','ciphertext'} or envelope.get('v')!=1 or envelope.get('alg')!='A256GCM':
-                raise Error(400, 'Gültiger verschlüsselter Umschlag erforderlich')
-            try:
-                iv = base64.b64decode(envelope['iv'],validate=True)
-                ciphertext = base64.b64decode(envelope['ciphertext'],validate=True)
-            except (ValueError,TypeError,KeyError):
-                raise Error(400, 'Ungültige Verschlüsselungsdaten')
-            if len(iv)!=12 or not 16<=len(ciphertext)<=196608:
-                raise Error(400, 'Ungültige Verschlüsselungsgröße')
-            revision = d['revision']+1
-            c.execute('INSERT INTO private_vaults VALUES(?,?,?) ON CONFLICT(user) DO UPDATE SET revision=excluded.revision,payload=excluded.payload', (u['id'],revision,json.dumps(envelope)))
-            return {'revision':revision}, None
+            return save_vault(c, u['id'], d), None
+        if path == '/api/account/identity' and method == 'POST':
+            jwk = d.get('public_key')
+            if not isinstance(jwk,dict) or set(jwk) != {'kty','crv','x','y'} or jwk.get('kty') != 'EC' or jwk.get('crv') != 'P-256' or any(not isinstance(jwk.get(k),str) or not re.fullmatch(r'[A-Za-z0-9_-]{43}',jwk[k]) for k in ('x','y')):
+                raise Error(400, 'Ungültiger öffentlicher Schlüssel')
+            encoded = json.dumps(jwk,sort_keys=True)
+            row = c.execute('SELECT jwk FROM public_identities WHERE user=?',(u['id'],)).fetchone()
+            if row and row['jwk'] != encoded:
+                raise Error(409, 'Ein anderer Kontoschlüssel ist bereits registriert')
+            c.execute('INSERT OR IGNORE INTO public_identities VALUES(?,?)',(u['id'],encoded))
+            return {}, None
         if path == '/api/sessions':
             if method == 'POST':
                 sid = secrets.token_hex(12)
@@ -409,7 +516,11 @@ class Handler(BaseHTTPRequestHandler):
                     return {'id': sid, 'title': srow['title'], 'host_name': c.execute('SELECT name FROM users WHERE id=?', (srow['host'],)).fetchone()['name'], 'membership': 'expired' if m['status']=='pending' and m['expires'] < time.time() else m['status'], 'expires': m['expires']}, None
                 s = self.access(c, sid, u)
                 s['membership'] = 'accepted'
-                s['public_url'] = s['public_url'] or os.environ.get('BIERPETER_PUBLIC_URL','')
+                try:
+                    s['public_url'] = public_url(s['public_url'] or os.environ.get('BIERPETER_PUBLIC_URL',''))
+                except Error:
+                    s['public_url'] = ''
+                    s['public_url_error'] = 'Die bisher gespeicherte Einladungsadresse ist nicht für andere Geräte geeignet. Eine erreichbare LAN-Adresse oder Domain einstellen.'
                 s['hardware_key_configured'] = len(hardware_key()) >= 32
                 s['members'] = [dict(x) for x in c.execute('SELECT u.id,u.name,m.status,m.expires FROM members m JOIN users u ON u.id=m.user WHERE m.session=?', (sid,))]
                 # Pending identities are only visible to host; all participants see accepted roster.
@@ -418,7 +529,20 @@ class Handler(BaseHTTPRequestHandler):
                 s['devices'] = [x['id'] for x in c.execute('SELECT id FROM devices WHERE session=? ORDER BY position,id', (sid,))]
                 s['device_providers'] = {x['id']: x['provider'] for x in c.execute('SELECT id,provider FROM devices WHERE session=?', (sid,))}
                 s['hardware'] = [hardware_status(c, ident) for ident in s['devices']]
-                s['commands'] = [dict(x) for x in c.execute('SELECT id,device,action,peer_mac,state,detail FROM hardware_commands WHERE device IN (SELECT id FROM devices WHERE session=?) ORDER BY created', (sid,))]
+                s['identity_keys'] = {x['user']:json.loads(x['jwk']) for x in c.execute("SELECT p.* FROM public_identities p JOIN members m ON m.user=p.user WHERE m.session=? AND m.status='accepted'",(sid,))}
+                s['shared_names'] = [dict(x) for x in c.execute("SELECT n.provider,n.revision,n.payload FROM shared_names n JOIN members m ON m.user=n.provider AND m.session=n.session WHERE n.session=? AND n.recipient=? AND m.status='accepted'",(sid,u['id']))]
+                for item in s['shared_names']:
+                    item['envelope'] = json.loads(item.pop('payload'))
+                s['discoveries'] = []
+                for found in c.execute("SELECT DISTINCT d.* FROM discoveries d JOIN hardware h ON h.id=d.observer WHERE d.seen>? AND h.last_seen>? AND (d.observer IN(SELECT device FROM managed_devices WHERE user=?) OR d.observer IN(SELECT id FROM devices WHERE session=? AND provider=?)) ORDER BY d.observer,d.device",(time.time()-ONLINE_WINDOW,time.time()-ONLINE_WINDOW,u['id'],sid,u['id'])):
+                    s['discoveries'].append(dict(found))
+                for row in c.execute('SELECT id FROM hardware WHERE id IN(SELECT device FROM managed_devices WHERE user=?) OR id IN(SELECT id FROM devices WHERE session=? AND provider=?)',(u['id'],sid,u['id'])):
+                    hardware = hardware_status(c,row['id'])
+                    if hardware.get('peer_active'):
+                        if not any(x['observer']==hardware['id'] and x['device']==hardware['peer_mac'] for x in s['discoveries']):
+                            s['discoveries'].append({'observer':hardware['id'],'device':hardware['peer_mac'],'transport':'esp-now','channel':hardware['wifi_channel'],'rssi':None,'seen':hardware['last_seen']})
+
+                s['commands'] = [dict(x) for x in c.execute('SELECT id,device,action,peer_mac,state,detail FROM hardware_commands WHERE session=? OR (session IS NULL AND device IN (SELECT id FROM devices WHERE session=?)) ORDER BY created', (sid,sid))]
                 s['races'] = [dict(x) for x in c.execute('SELECT * FROM races WHERE session=? ORDER BY rowid', (sid,))]
                 for r in s['races']:
                     r['slots'] = [dict(x) for x in c.execute('SELECT * FROM slots WHERE race=?', (r['id'],))]
@@ -434,8 +558,30 @@ class Handler(BaseHTTPRequestHandler):
                 if m['status'] != 'accepted' and (m['status'] != 'pending' or m['expires'] < time.time()):
                     c.execute("UPDATE members SET status='pending',expires=? WHERE session=? AND user=?", (time.time()+900, sid, u['id']))
                 return {}, None
-            s = self.access(c, sid, u, host=action not in ('device', 'device-remove'))
-            if action == 'member':
+            s = self.access(c, sid, u, host=action not in ('device', 'device-remove', 'names'))
+            if action == 'delete':
+                if c.execute("SELECT 1 FROM races WHERE session=? AND state='running'",(sid,)).fetchone():
+                    raise Error(409, 'Laufende Runde zuerst regulär beenden oder abbrechen')
+                c.execute('DELETE FROM shared_names WHERE session=?',(sid,))
+                c.execute('DELETE FROM slots WHERE race IN(SELECT id FROM races WHERE session=?)',(sid,))
+                for table in ('races','devices','members'):
+                    c.execute('DELETE FROM '+table+' WHERE session=?',(sid,))
+                c.execute('DELETE FROM hardware_commands WHERE session=?',(sid,))
+                c.execute('DELETE FROM sessions WHERE id=?',(sid,))
+            elif action == 'names':
+                row = c.execute('SELECT revision FROM private_vaults WHERE user=?',(u['id'],)).fetchone()
+                if not row or d.get('revision') != row['revision']:
+                    raise Error(409, 'Private Daten wurden geändert; neu entsperren')
+                bundles = d.get('bundles')
+                if not isinstance(bundles,list) or len(bundles)>100 or len({b.get('recipient') for b in bundles if isinstance(b,dict)}) != len(bundles):
+                    raise Error(400, 'Ungültige Namensfreigabe')
+                for bundle in bundles:
+                    recipient = text(bundle,'recipient',24)
+                    if not c.execute("SELECT 1 FROM members m JOIN public_identities p ON p.user=m.user WHERE m.session=? AND m.user=? AND m.status='accepted'",(sid,recipient)).fetchone():
+                        raise Error(403, 'Empfänger nicht zugelassen oder ohne Schlüssel')
+                    sealed = envelope(bundle.get('envelope'))
+                    c.execute('INSERT INTO shared_names VALUES(?,?,?,?,?) ON CONFLICT(session,provider,recipient) DO UPDATE SET revision=excluded.revision,payload=excluded.payload',(sid,u['id'],recipient,row['revision'],json.dumps(sealed)))
+            elif action == 'member':
                 target = text(d, 'user')
                 if target == s['host']:
                     raise Error(400, 'Host bleibt in der Session')
@@ -449,6 +595,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise Error(409, 'Anfrage abgelaufen; erneute Anfrage erforderlich')
                 c.execute('UPDATE members SET status=?,expires=NULL WHERE session=? AND user=?', (status, sid, target))
                 if status != 'accepted':
+                    c.execute('DELETE FROM shared_names WHERE session=? AND (provider=? OR recipient=?)',(sid,target,target))
                     c.execute('DELETE FROM slots WHERE user=? AND race IN(SELECT id FROM races WHERE session=?)', (target, sid))
             elif action == 'device':
                 add_device(c, sid, device_id(text(d, 'device', 64)), u['id'])
@@ -509,7 +656,7 @@ class Handler(BaseHTTPRequestHandler):
                 for ident, peer in ((first, second), (second, first)):
                     if c.execute("SELECT 1 FROM hardware_commands WHERE device=? AND state='pending'", (ident,)).fetchone():
                         raise Error(409, 'Gerätebefehl noch ausstehend')
-                    c.execute('INSERT INTO hardware_commands VALUES(?,?,?,?,?,?,?)', (secrets.token_hex(12), ident, 'pair', peer, 'pending', '', time.time()))
+                    c.execute('INSERT INTO hardware_commands(id,device,action,peer_mac,state,detail,created,session) VALUES(?,?,?,?,?,?,?,?)', (secrets.token_hex(12), ident, 'pair', peer, 'pending', '', time.time(),sid))
             elif action == 'race':
                 if d.get('mode') not in MODES or d.get('policy') not in ('host', 'free'):
                     raise Error(400, 'Ungültiger Spielmodus oder Positionswahl')
@@ -553,6 +700,6 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == '__main__':
     init()
-    server = ThreadingHTTPServer((os.environ.get('BIERPETER_HOST', '127.0.0.1'), int(os.environ.get('BIERPETER_PORT', '8080'))), Handler)
+    server = Server((os.environ.get('BIERPETER_HOST', '127.0.0.1'), int(os.environ.get('BIERPETER_PORT', '8080'))), Handler)
     print('BierPeter Alpha: http://%s:%s' % server.server_address, flush=True)
     server.serve_forever()

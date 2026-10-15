@@ -2,7 +2,7 @@
 // Private-storage prototype. Key material is never transmitted to the server.
 globalThis.BierPeterVault=(()=>{
   const encoder=new TextEncoder(),decoder=new TextDecoder();
-  const b64=bytes=>btoa(String.fromCharCode(...new Uint8Array(bytes)));
+  const b64=bytes=>{const data=new Uint8Array(bytes),parts=[];for(let i=0;i<data.length;i+=8192)parts.push(String.fromCharCode(...data.subarray(i,i+8192)));return btoa(parts.join(''));};
   const bytes=value=>Uint8Array.from(atob(value),c=>c.charCodeAt(0));
   const aad=owner=>encoder.encode('BierPeter:private:v1:'+owner);
   function available(){return !!globalThis.crypto?.subtle;}

@@ -24,11 +24,13 @@ def main():
             value='http://'+host+':6017'
         except (OSError,ValueError):
             print('LAN-Adresse nicht eindeutig ermittelbar; sie kann in der Lobby eingestellt werden.');return 1
-    p=urlsplit(value)
-    if p.scheme not in ('http','https') or not p.hostname or p.username or p.password or p.path not in ('','/') or p.query or p.fragment or p.hostname in ('localhost','127.0.0.1','::1') or any(c in value for c in "'\"\n\r$"):
+    from server import public_url, Error
+    try:
+        public_url(value)
+    except (Error,ValueError):
         print('Ungültige LAN-Basisadresse.');return 1
-    try:p.port
-    except ValueError:return 1
+    if any(c in value for c in "'\"\n\r$"):
+        print('Ungültige LAN-Basisadresse.');return 1
     lines=[line for line in existing.splitlines() if not re.match(r'^\s*BIERPETER_PUBLIC_URL\s*=',line)]
     lines.append("BIERPETER_PUBLIC_URL='"+value.rstrip('/')+"'")
     fd=os.open(target,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600);os.fchmod(fd,0o600)

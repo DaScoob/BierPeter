@@ -1,8 +1,12 @@
-# BierPeter · Alpha 0.2.1
+# BierPeter · Alpha 0.2.2
 
 Lokale Web-App mit gemeinsamer Session-Lobby, kontexterhaltenden Geräte-/Einladungslinks und einer Anbindung an das vorhandene ESP-Testfirmware-Protokoll.
 
-## Neu in 0.2.1
+## Neu in 0.2.2
+
+Session-QR, Geräte-Scan per Kamera oder Bild, Session-Löschung, verschlüsselte Namensfreigabe an zugelassene Mitspieler, tatsächliche Peer-Funde und Korrekturen der beobachteten Mehrfenster-/Lastfehler. Details und Grenzen: [docs/ALPHA_022.md](docs/ALPHA_022.md). Lizenz: **AGPL-3.0-only**, Fremdkomponenten unter MIT beziehungsweise Apache-2.0, siehe [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+## Weiterhin enthalten aus 0.2.1
 
 - Gemeinsames aktives Race für die gesamte Lobby, auch nach Neuladen.
 - Geräte aus Sessions entfernen und Reihenfolge/Startgerät festlegen.
@@ -14,13 +18,13 @@ Lokale Web-App mit gemeinsamer Session-Lobby, kontexterhaltenden Geräte-/Einlad
 - Erneute Beitrittsanfrage aus der wartenden/entfernten Lobby ohne Suche nach dem alten Einladungslink.
 - LAN-Einladungsadresse über die Lobby oder die lokale `.env` konfigurierbar.
 
-**Sicherheitsgrenze:** Der private Speicher ist ein Prototyp. Benutzernamen und gemeinsame Lobby-Daten verwenden weiterhin das bisherige Klartextmodell. Private Gerätenamen werden noch nicht verschlüsselt mit Mitspielern geteilt. Getrennte Account-/Race-Dienste sind unter `security/` ausführbar, aber noch nicht an die laufende Lobby angeschlossen. Die Alpha ist nicht als vollständig Ende-zu-Ende-verschlüsseltes Produkt freigegeben.
+**Sicherheitsgrenze:** Der private Speicher ist ein Prototyp. Benutzernamen und gemeinsame Lobby-Daten verwenden weiterhin das bisherige Klartextmodell. Gerätenamen können jetzt für zugelassene Empfänger verschlüsselt geteilt werden. Beide privaten Bereiche müssen eingerichtet und entsperrt sein; Erstidentitäten benötigen einen unabhängigen Schlüsselvergleich. Getrennte Account-/Race-Dienste sind unter `security/` ausführbar, aber noch nicht an die laufende Lobby angeschlossen. Die Alpha ist nicht als vollständig Ende-zu-Ende-verschlüsseltes Produkt freigegeben.
 
 ## Private Daten und Dashboard
 
 Unter Konto zuerst den privaten Bereich einrichten: Schlüssel erzeugen, Schlüsseldatei herunterladen und privat aufbewahren, dann den Bereich anlegen. Nach Neuladen oder auf einem anderen Gerät wird diese Schlüsseldatei zum Entsperren benötigt. Ein Passwort-Reset kann den Inhalt nicht entschlüsseln. Es wird keine Kopie des Schlüssels auf dem Server gespeichert.
 
-Eine persönliche Geräteverwaltung ist unabhängig von der Session. Entfernen aus der Session löscht keine Konto-Merkliste; Entfernen aus dem Konto verändert keine Session. Eine Merkliste beweist kein Eigentum. Private Gerätenamen werden im eigenen Browser nach Entsperren auch in der Lobby angezeigt; andere Teilnehmer erhalten bis zur sicheren Gruppenfreigabe weiterhin die Gerätekennung.
+Eine persönliche Geräteverwaltung ist unabhängig von der Session. Entfernen aus der Session löscht keine Konto-Merkliste; Entfernen aus dem Konto verändert keine Session. Eine Merkliste beweist kein Eigentum. Gerätenamen werden nach Entsperren angezeigt und bei geöffneter Lobby für zugelassene Mitspieler verschlüsselt freigegeben. Auch Empfänger müssen ihren privaten Bereich eingerichtet und entsperrt haben. Bei noch fehlender Freigabe bleibt die Gerätekennung sichtbar.
 
 Dashboard-Widgets: Überblick, Ergebnistabelle, Zeitverlauf und Spielmodi. Im Bearbeitungsmodus sind Sichtbarkeit und Reihenfolge änderbar; die Einstellungen werden verschlüsselt gespeichert. Ohne abgeschlossene, gewertete Races bleiben Statistiken leer. Es werden keine Ergebnisse erfunden. Ergebnisanbindung und Portabilität folgen später.
 
@@ -84,6 +88,10 @@ cd ~/BierPeter
 python3 -m unittest discover -s tests -v
 node tests/ui-flow.cjs
 node tests/ui-alpha021.cjs
+node tests/ui-alpha022.cjs
+node tests/qr-roundtrip.cjs
+node tests/qr-lifecycle.cjs
+python3 tests/stress-alpha022.py
 node --check web/app.js
 ```
 
@@ -95,7 +103,7 @@ Implementiert: Konten, Sessions, Host-Bestätigung, Einladungs-/Geräte-Kontext,
 
 Nicht implementiert: neue Spielfirmware, Glasbereitschaft, Race-Start und Ergebniswertung, Trainings-Countdown, Turnierpläne, JSON-Portabilität, vollständige Account-Wiederherstellung und Kontolöschung. Spielmodi sind als Vorbereitungsentwürfe wählbar. Es gibt keine simulierten Sensorereignisse oder Messzeiten.
 
-Passwort-Hashes: scrypt mit Salt. Login-Tokens: gehasht, serverseitig maximal zwölf Stunden. HttpOnly-Cookie mit SameSite=Strict; bei HTTPS `BIERPETER_SECURE_COOKIE=1` verwenden. Keine externen Ressourcen oder Analyse. Der Standardbibliothek-Server ist eine lokale Entwicklungsfassung. Vor öffentlichem Dienstbetrieb sind Hosting-Härtung, Betreiberangaben, Datenschutz, Lösch-/Exportfunktionen und Lizenz zu vervollständigen.
+Passwort-Hashes: scrypt mit Salt. Login-Tokens: gehasht, serverseitig maximal zwölf Stunden. HttpOnly-Cookie mit SameSite=Strict; bei HTTPS `BIERPETER_SECURE_COOKIE=1` verwenden. Keine externen Ressourcen oder Analyse. Der Standardbibliothek-Server ist eine lokale Entwicklungsfassung. Vor öffentlichem Dienstbetrieb sind Hosting-Härtung, Betreiberangaben, Datenschutz und vollständige Lösch-/Exportfunktionen zu vervollständigen.
 
 ## GitHub und POMPUI
 
@@ -105,4 +113,8 @@ Quellstand: https://github.com/DaScoob/BierPeter
 
 Updates werden als Git-Bundle übergeben und vom Betreiber gepusht. `github-upload.sh` dient ausschließlich einer Erstveröffentlichung aus einem Quellarchiv ohne Git-Metadaten; nicht für Updates verwenden.
 
-Vorlagen in `infrastructure/` dienen der späteren POMPUI-Integration. Sie führen kein Deployment aus. Die konkrete Open-Source-Lizenz bleibt festzulegen.
+Vorlagen in `infrastructure/` dienen der späteren POMPUI-Integration. Sie führen kein Deployment aus. Die Open-Source-Lizenz ist AGPL-3.0-only. Das korrespondierende Quellcodeangebot steht unter `/source.tar.gz` bereit.
+
+## Lizenz
+
+Copyright (C) 2026 BierPeter contributors. Eigener Code unter GNU Affero General Public License, Version 3 ausschließlich (SPDX: AGPL-3.0-only). Die Anwendung wird ohne Gewährleistung bereitgestellt; maßgeblich ist der vollständige Text in LICENSE. Abweichende Fremdlizenzen sind in THIRD_PARTY_NOTICES.md aufgeführt.

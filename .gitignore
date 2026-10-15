@@ -10,3 +10,5 @@ secrets/
 
 .venv*/
 security-data/
+
+/source.tar.gz
