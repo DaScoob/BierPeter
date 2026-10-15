@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+#include "CaptivePortal.h"
 #include "Game.h"
 #include "HttpLink.h"
 #include "Platform.h"
@@ -8,7 +9,7 @@
 #include <ArduinoJson.h>
 
 namespace {
-constexpr char Version[] = "0.3.2-alpha";
+constexpr char Version[] = "0.3.3-alpha";
 constexpr uint32_t Magic = 0x42503033;
 constexpr uint16_t FragmentSize = 180, MaxMessage = 6144;
 struct __attribute__((packed)) Packet {
@@ -66,6 +67,11 @@ bool sideStarted[2] = {false, false};
 bool hostLocked = false, managed = false, isDemo = false, realtime = true, serverDirty = false,
      apRunning = false;
 bool onlineEnabled = false, scanWanted = false, scanRunning = false;
+bool dnsReady = false;
+uint64_t lastPortalPage = 0, scanQuietUntil = 0, lastDnsStart = 0, lastPortalLog = 0;
+uint8_t portalClients = 0;
+volatile bool portalPageSeen = false;
+uint32_t portalPages = 0, portalRedirects = 0;
 bp::SetupFlow setupFlow;
 uint64_t lastServerAck = 0, lastScan = 0, lastSetupSnapshot = 0;
 String scanJson = "[]", scanError, setupMessage, testedServerVersion;
@@ -516,7 +522,8 @@ void acceptDone(uint8_t device, uint8_t side, uint64_t duration, uint64_t finish
   sendTurn(relay.next[side], side, finish);
   finishRun();
 }
-// Future real-sensor adapters call this exact function; virtual inputs follow the same path.
+// Future real-sensor adapters call this exact function; virtual inputs follow
+// the same path.
 void sensorEvent(uint8_t side, bp::SensorEvent event, uint64_t at) {
   if (side > 1)
     return;
@@ -596,7 +603,8 @@ void process(const String &from, JsonObjectConst d, bool viaRadio) {
       return;
     peers[index].pub = publicKey;
     peers[index].prepared = d["r"] | false;
-    // An established earlier host wins; close boot times use MAC as tie-breaker.
+    // An established earlier host wins; close boot times use MAC as
+    // tie-breaker.
     uint64_t uptime = d["u"] | uint64_t(0);
     bool earlier = uptime > nowUs + 500000 || (uptime + 500000 >= nowUs && from < id);
     bool solo = true;
@@ -655,7 +663,8 @@ void process(const String &from, JsonObjectConst d, bool viaRadio) {
   if (type == "CFG") {
     if (runOpen() && runId != d["run"].as<String>())
       return;
-    // Only a previously admitted coordinator may configure an existing local group.
+    // Only a previously admitted coordinator may configure an existing local
+    // group.
     if (from != hostId && !managed && (index < 0 || !peers[index].admitted))
       return;
     applyRun(d);
@@ -953,7 +962,8 @@ void httpResponse() {
     setupFlow.auth(accepted, status == 401 || status == 403 || status == 503);
     if (accepted) {
       lastServerAck = nowUs;
-      setupMessage = "Verbindung geprüft. Serverkommunikation pausiert bis zum Onlinebetrieb.";
+      setupMessage = "Verbindung geprüft. Serverkommunikation pausiert bis zum "
+                     "Onlinebetrieb.";
     }
     return;
   }
@@ -1007,7 +1017,8 @@ void httpResponse() {
           !box.open(peers[i].pub, context("wire", from, id, seq), message["envelope"], plain))
         continue;
       consume(from, seq, plain, false);
-      // Radio-style ACK travels encrypted over the same relay as ordinary messages.
+      // Radio-style ACK travels encrypted over the same relay as ordinary
+      // messages.
       JsonDocument ack;
       ack["t"] = "ACK";
       ack["seq"] = seq;
@@ -1042,7 +1053,8 @@ void sealResult() {
       if (box.seal(recipientsPublic[r], context("result", id, recipientsId[r]), resultPlain, e) &&
           bufferUpload(serialize(d)))
         recipientsId[r] = "";
-      return; // Crypto is performed after timing completes, one recipient per loop.
+      return; // Crypto is performed after timing completes, one recipient per
+              // loop.
     }
   bool pending = false;
   for (auto &u : uploads)
@@ -1173,10 +1185,30 @@ void startAP() {
   }
   WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1),
                     IPAddress(255, 255, 255, 0));
-  WiFi.softAP(("BierPeter-" + id.substring(6)).c_str(), nullptr, channel, false, 4);
-  dns.start(53, "*", WiFi.softAPIP());
+  // A standalone setup group uses the preferred common discovery channel.
+  // Never move an existing peer group or an associated station to another
+  // channel.
+  bool group = false;
+  for (int i = 0; i < peerCount; ++i)
+    group |= peers[i].admitted && peers[i].id != id;
+  if (WiFi.status() != WL_CONNECTED && !group && !runOpen()) {
+    channel = 11;
+    radioChannel(channel);
+  }
+  if (!WiFi.softAP(("BierPeter-" + id.substring(6)).c_str(), nullptr, channel, false, 4))
+    return;
+  dns.setTTL(0);
+  dns.setErrorReplyCode(DNSReplyCode::NoError);
+  dnsReady = dns.start(53, "*", WiFi.softAPIP());
+  lastDnsStart = nowUs;
   apRunning = true;
-  scanWanted = true;
+  scanWanted = false;
+  lastPortalPage = 0;
+  portalClients = 0;
+  scanQuietUntil = nowUs + 8000000;
+  BP_LOCK();
+  portalPageSeen = false;
+  BP_UNLOCK();
 }
 void handleWeb() {
   uint8_t kind;
@@ -1228,7 +1260,8 @@ void handleWeb() {
           authority.indexOf('\r') >= 0 || authority.indexOf('\n') >= 0 || host == "localhost" ||
           host == "127.0.0.1" || host == "0.0.0.0" || !host.length() || !validPort ||
           port.toInt() < 1 || port.toInt() > 65535) {
-        actionError = "Erreichbare lokale Serveradresse als http://Hostname:Port angeben. Kein "
+        actionError = "Erreichbare lokale Serveradresse als "
+                      "http://Hostname:Port angeben. Kein "
                       "localhost, HTTPS oder Pfad.";
         return;
       }
@@ -1248,8 +1281,8 @@ void handleWeb() {
     bool clearPassword = d["clear_password"] | false;
     if (!pass.length() && !clearPassword) {
       if (newSsid != ssid && password.length()) {
-        actionError =
-            "Für ein anderes WLAN Passwort eingeben oder ausdrücklich ein offenes WLAN auswählen.";
+        actionError = "Für ein anderes WLAN Passwort eingeben oder "
+                      "ausdrücklich ein offenes WLAN auswählen.";
         return;
       }
       pass = password;
@@ -1301,14 +1334,16 @@ void handleWeb() {
       return;
     }
     if (!saveConfigValues(ssid, password, serverOrigin, deviceKey, true)) {
-      actionError = "Onlinebetrieb konnte nicht gespeichert werden. SoftAP bleibt erreichbar.";
+      actionError = "Onlinebetrieb konnte nicht gespeichert werden. SoftAP "
+                    "bleibt erreichbar.";
       return;
     }
     if (!setupFlow.online(nowUs, runOpen())) {
       actionError = "Onlinebetrieb derzeit nicht möglich.";
       return;
     }
-    setupMessage = "Onlinebetrieb startet in sechs Sekunden. Danach ins Heimnetz wechseln.";
+    setupMessage = "Onlinebetrieb startet in sechs Sekunden. Danach ins "
+                   "Heimnetz wechseln.";
     actionState = "done";
     return;
   }
@@ -1463,6 +1498,15 @@ void updateSetupSnapshot() {
   d["scan_error"] = scanError;
   d["scan_age_s"] = lastScan ? (nowUs - lastScan) / 1000000 : 0;
   d["run_open"] = runOpen();
+  auto diagnostic = d["portal"].to<JsonObject>();
+  diagnostic["dns_ready"] = dnsReady;
+  diagnostic["channel"] = WiFi.channel();
+  diagnostic["clients"] = WiFi.softAPgetStationNum();
+  BP_LOCK();
+  uint32_t pages = portalPages, redirects = portalRedirects;
+  BP_UNLOCK();
+  diagnostic["pages"] = pages;
+  diagnostic["redirects"] = redirects;
   JsonDocument networks;
   deserializeJson(networks, scanJson);
   d["networks"] = networks.as<JsonArray>();
@@ -1480,7 +1524,19 @@ void setupTick() {
       setupFlow.fail("Verbindungstest wegen eines Runs beendet.");
     return;
   }
-  if (scanWanted && !scanRunning && !setupFlow.busy() && apRunning && !http.busy()) {
+  BP_LOCK();
+  bool pageSeen = portalPageSeen;
+  portalPageSeen = false;
+  BP_UNLOCK();
+  if (pageSeen)
+    lastPortalPage = nowUs;
+  if (apRunning && !dnsReady && nowUs - lastDnsStart >= 1000000) {
+    lastDnsStart = nowUs;
+    dns.stop();
+    dnsReady = dns.start(53, "*", WiFi.softAPIP());
+  }
+  if (scanWanted && !scanRunning && !setupFlow.busy() && apRunning && !http.busy() &&
+      bp::portalScanReady(nowUs, lastPortalPage, scanQuietUntil)) {
     scanWanted = false;
     scanError = "";
     WiFi.scanDelete();
@@ -1562,6 +1618,7 @@ void setupTick() {
   if (setupFlow.switchDue(nowUs)) {
     onlineEnabled = true;
     dns.stop();
+    dnsReady = false;
     WiFi.softAPdisconnect(true);
     WiFi.mode(WIFI_STA);
     apRunning = false;
@@ -1572,6 +1629,22 @@ void setupTick() {
     BP_UNLOCK();
     delete[] previous;
   }
+}
+void captiveRedirect(AsyncWebServerRequest *r) {
+  if (r->client()->localIP() != WiFi.softAPIP()) {
+    r->send(403);
+    return;
+  }
+  BP_LOCK();
+  ++portalRedirects;
+  BP_UNLOCK();
+  auto *response =
+      r->beginResponse(302, "text/plain", "BierPeter Einrichtung: http://192.168.4.1/");
+  response->addHeader("Location", "http://192.168.4.1/");
+  response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+  response->addHeader("Pragma", "no-cache");
+  response->addHeader("Expires", "0");
+  r->send(response);
 }
 void portalSetup() {
   snapshot = new char[4096];
@@ -1609,15 +1682,27 @@ void portalSetup() {
     delete[] copy;
   });
   portal.on("/", HTTP_GET, [](AsyncWebServerRequest *r) {
-    if (r->client()->localIP() != WiFi.softAPIP()) {
+    String host = r->host();
+    auto route = bp::portalRoute(r->client()->localIP() == WiFi.softAPIP(), true, host.c_str());
+    if (route == bp::PortalRoute::Deny) {
       r->send(403);
       return;
     }
+    if (route == bp::PortalRoute::Redirect) {
+      captiveRedirect(r);
+      return;
+    }
+    BP_LOCK();
+    portalPageSeen = true;
+    ++portalPages;
+    BP_UNLOCK();
 #ifdef ESP8266
-    r->send_P(200, "text/html; charset=utf-8", PortalPage);
+    auto *response = r->beginResponse_P(200, "text/html; charset=utf-8", PortalPage);
 #else
-    r->send(200, "text/html; charset=utf-8", PortalPage);
+    auto *response = r->beginResponse(200, "text/html; charset=utf-8", PortalPage);
 #endif
+    response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    r->send(response);
   });
   for (const char *path : {"/config", "/session", "/test", "/online", "/scan"})
     portal.on(
@@ -1677,25 +1762,20 @@ void portalSetup() {
           }
           r->send(202, "application/json", "{\"request\":\"" + String(serial) + "\"}");
         });
-  auto captive = [](AsyncWebServerRequest *r) {
-    if (r->client()->localIP() != WiFi.softAPIP()) {
-      r->send(403);
-      return;
-    }
-    auto *response =
-        r->beginResponse(302, "text/plain", "BierPeter Einrichtung: http://192.168.4.1/");
-    response->addHeader("Location", "http://192.168.4.1/");
-    response->addHeader("Cache-Control", "no-store");
-    r->send(response);
-  };
   for (const char *path :
        {"/generate_204", "/gen_204", "/hotspot-detect.html", "/library/test/success.html",
         "/connecttest.txt", "/ncsi.txt", "/redirect", "/success.txt"})
-    portal.on(path, HTTP_GET, captive);
-  portal.onNotFound(captive);
+    portal.on(path, HTTP_GET, captiveRedirect);
+  portal.onNotFound(captiveRedirect);
   portal.begin();
 }
 void wifiTick() {
+  if (apRunning) {
+    uint8_t clients = WiFi.softAPgetStationNum();
+    if (clients > portalClients)
+      scanQuietUntil = nowUs + 8000000;
+    portalClients = clients;
+  }
   bool connected = WiFi.status() == WL_CONNECTED;
   if (connected) {
     wifiLost = 0;
@@ -1708,7 +1788,7 @@ void wifiTick() {
     startAP();
   if (onlineEnabled && !connected && ssid.length() && nowUs - lastReconnect > 30000000 &&
       !runOpen() && !scanRunning && !setupFlow.busy() &&
-      (!apRunning || WiFi.softAPgetStationNum() == 0)) {
+      (!apRunning || (WiFi.softAPgetStationNum() == 0 && nowUs >= scanQuietUntil))) {
     WiFi.begin(ssid.c_str(), password.c_str());
     lastReconnect = nowUs;
   }
@@ -1716,8 +1796,10 @@ void wifiTick() {
   for (int i = 0; i < peerCount; ++i)
     if (peers[i].admitted && peers[i].id != id)
       group = true;
-  if (!connected && !group && !runOpen() && !setupFlow.busy() && !scanRunning &&
-      (!apRunning || WiFi.softAPgetStationNum() == 0) &&
+  // SoftAP beacons, association and captive probes need one stable channel,
+  // including the time BEFORE a station appears in softAPgetStationNum().
+  // Same-channel ESP-NOW remains available. Hopping resumes after AP handoff.
+  if (!apRunning && !connected && !group && !runOpen() && !setupFlow.busy() && !scanRunning &&
       nowUs - lastHop > (channel == 11 ? 2000000 : 300000)) {
     lastHop = nowUs;
     channel = ++hop % 12;
@@ -1804,6 +1886,17 @@ void loop() {
   }
   if (apRunning)
     dns.processNextRequest();
+  if (apRunning && !runOpen() && nowUs - lastPortalLog >= 5000000) {
+    lastPortalLog = nowUs;
+    BP_LOCK();
+    uint32_t pages = portalPages, redirects = portalRedirects;
+    BP_UNLOCK();
+    Serial.printf("[portal] firmware=%s dns=%u channel=%u clients=%u pages=%lu "
+                  "redirects=%lu scan=%u\n",
+                  Version, unsigned(dnsReady), unsigned(WiFi.channel()),
+                  unsigned(WiFi.softAPgetStationNum()), (unsigned long)pages,
+                  (unsigned long)redirects, unsigned(scanRunning));
+  }
   updateSnapshot();
   updateSetupSnapshot();
   yield();

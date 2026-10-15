@@ -84,6 +84,8 @@ Weitere Angaben und Hardware-Abnahme: `docs/FIRMWARE_030.md` und `docs/VALIDATIO
 
 ## Firmware 0.3.2: neuer Einrichtungsablauf
 
+Aktuelle Korrektur: **Firmware 0.3.3** stabilisiert den SoftAP-Kanal, ergänzt die Weiterleitung fremder HTTP-Hosts und verschiebt die WLAN-Suche hinter den Portalaufbau. Diagnose, Grenzen und Geräteabnahme: [docs/FIRMWARE_033.md](../docs/FIRMWARE_033.md). Der Server bleibt bei 0.3.1.
+
 WLAN aus der Liste auswählen, Einstellungen speichern, Verbindung testen und erst anschließend den Onlinebetrieb bestätigen. Nach der Bestätigung wird der SoftAP abgeschaltet. Die vorhandenen WLAN-Daten und die Geräteidentität bleiben beim regulären Firmware-Upload erhalten. Der Server bleibt bei Version 0.3.1. Vollständiger Ablauf und Testgrenzen: [docs/FIRMWARE_032.md](../docs/FIRMWARE_032.md).
 
 Die im Abschnitt „Einrichtung“ genannten Felder heißen jetzt ausdrücklich „Server-Zugriffsschlüssel“ und „Serveradresse“. `DEVICE_API_KEY` ist nicht der öffentliche Geräteschlüssel. Ohne ausdrücklich gestarteten Onlinebetrieb werden keine normalen Serverbefehle abgeholt. Bereits gespeicherte Zugangsdaten werden bei der Migration übernommen; das neue Verfahren verlangt vor dem ersten Onlinewechsel einen Verbindungstest.

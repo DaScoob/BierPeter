@@ -2,9 +2,9 @@
 
 Lokale Web-App mit gemeinsamer Session-Lobby, kontexterhaltenden Geräte-/Einladungslinks und einer Anbindung an das vorhandene ESP-Testfirmware-Protokoll.
 
-## Firmware Alpha 0.3.2
+## Firmware Alpha 0.3.3
 
-Die lokale Einrichtung unterstützt WLAN-Auswahl, bestätigtes Speichern, einen gestuften Verbindungstest und einen ausdrücklich bestätigten Wechsel vom SoftAP in den Onlinebetrieb. Server und Web-App bleiben auf 0.3.1. Details: [docs/FIRMWARE_032.md](docs/FIRMWARE_032.md).
+Die lokale Einrichtung unterstützt WLAN-Auswahl, bestätigtes Speichern, einen gestuften Verbindungstest und einen ausdrücklich bestätigten Wechsel vom SoftAP in den Onlinebetrieb. Firmware 0.3.3 korrigiert Kanalwechsel und HTTP-Weiterleitungen bei der Portal-Erkennung und ergänzt Diagnosewerte. Server und Web-App bleiben auf 0.3.1. Details: [docs/FIRMWARE_033.md](docs/FIRMWARE_033.md), Einrichtungsablauf: [docs/FIRMWARE_032.md](docs/FIRMWARE_032.md).
 
 ## Neu in 0.3.1: Firmware Alpha 0.3
 

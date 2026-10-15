@@ -1,0 +1,29 @@
+{
+  "esp8266": {
+    "firmware": "0.3.3-alpha",
+    "success": true,
+    "ram_static_bytes": 42820,
+    "ram_limit_bytes": 81920,
+    "flash_used_bytes": 423563,
+    "flash_app_limit_bytes": 1044464,
+    "sha256": "32dfb673c3003167f852f5e98a27ee372d9bf9fd6450c2e605a62859cdaa1a6d"
+  },
+  "esp32": {
+    "firmware": "0.3.3-alpha",
+    "success": true,
+    "ram_static_bytes": 54040,
+    "ram_limit_bytes": 327680,
+    "flash_used_bytes": 925453,
+    "flash_app_limit_bytes": 1310720,
+    "sha256": "6c3e32519147894b1b15c89ee1012025f6c7b6492ca7b03edefe4b26edbfb0ae"
+  },
+  "esp32-s3": {
+    "firmware": "0.3.3-alpha",
+    "success": true,
+    "ram_static_bytes": 53444,
+    "ram_limit_bytes": 327680,
+    "flash_used_bytes": 873021,
+    "flash_app_limit_bytes": 3342336,
+    "sha256": "abf957a9762e8c766fb170a8e0d09f1bc7cfc248b5c4a9ad62e0ac9b8e78bb10"
+  }
+}

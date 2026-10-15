@@ -1,5 +1,13 @@
 # Änderungen
 
+## Firmware 0.3.3-alpha · 2026-10-15
+
+- Stabiler SoftAP-Kanal bereits vor der WLAN-Anmeldung, keine ESP-NOW-Kanalwechsel während der Einrichtung.
+- Kanonische HTTP-Weiterleitung auch für fremde Domains am Wurzelpfad, Wildcard-DNS mit TTL 0 und DNS-Startwiederholung.
+- WLAN-Suche erst nach Portalabruf mit erneuter Schonfrist bei weiteren WLAN-Anmeldungen.
+- Geheimnisfreie Portaldiagnose in Oberfläche und serieller Ausgabe, ergänzte native und DOM-Tests.
+- Server/Web-App unverändert bei 0.3.1; automatische Portalöffnung muss weiterhin physisch geprüft werden.
+
 ## 0.3.0-alpha · 2026-10-15
 
 - Konto löschen mit Warnung und Bestätigung, ohne erneute Passwortabfrage; eigene Sessions werden gelöscht, keine Host-Übergabe.

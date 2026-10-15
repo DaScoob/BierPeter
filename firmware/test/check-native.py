@@ -16,6 +16,9 @@ with tempfile.TemporaryDirectory(prefix='bierpeter-native-') as tmp:
     setup=Path(tmp)/'setup'
     subprocess.run([*common,'-Wall','-Wextra','-Werror','-fsanitize=undefined',str(ROOT/'firmware/test/setup.cpp'),'-o',str(setup)],check=True)
     subprocess.run([str(setup)],check=True)
+    captive=Path(tmp)/'captive'
+    subprocess.run([*common,'-Wall','-Wextra','-Werror','-fsanitize=undefined',str(ROOT/'firmware/test/captive.cpp'),'-o',str(captive)],check=True)
+    subprocess.run([str(captive)],check=True)
     if not LIB.is_dir():raise SystemExit('Zuerst: pio pkg install -d firmware -e esp8266')
     names=['Curve25519','BigNumberUtil','SHA256','Hash','Crypto','GCM','GHASH','GF128','AES128','AES192','AES256','AESCommon','BlockCipher','AuthenticatedCipher','Cipher']
     binary=Path(tmp)/'crypto'

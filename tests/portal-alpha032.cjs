@@ -4,7 +4,7 @@ const assert=require('node:assert/strict'),fs=require('node:fs');
 const {JSDOM}=require(process.env.BIERPETER_JSDOM||'jsdom');
 const html=fs.readFileSync('firmware/portal.html','utf8');
 let serial=0,failSave=false,failTest=false,unreachable=false,posts=[],testStep=0;
-let state={firmware:'0.3.2-alpha',id:'AABBCCDDEEFF',stage:'idle',revision:1,saved:true,tested:false,busy:false,online_enabled:false,wifi_connected:false,server_online:false,ssid:'Saved WLAN',server:'http://192.168.1.20:6017',password_saved:true,key_saved:true,error:'',message:'',action_id:'',action_state:'idle',action_error:'',scanning:false,scan_error:'',scan_age_s:0,run_open:false,networks:[{ssid:'Office <img src=x onerror=alert(1)>',rssi:-40,open:false},{ssid:'Guest',rssi:-70,open:true}]};
+let state={firmware:'0.3.3-alpha',id:'AABBCCDDEEFF',stage:'idle',revision:1,saved:true,tested:false,busy:false,online_enabled:false,wifi_connected:false,server_online:false,ssid:'Saved WLAN',server:'http://192.168.1.20:6017',password_saved:true,key_saved:true,error:'',message:'',action_id:'',action_state:'idle',action_error:'',scanning:false,scan_error:'',scan_age_s:0,run_open:false,portal:{dns_ready:true,channel:11,clients:1,pages:2,redirects:3},networks:[{ssid:'Office <img src=x onerror=alert(1)>',rssi:-40,open:false},{ssid:'Guest',rssi:-70,open:true}]};
 const steps=['wifi','health','auth','passed'];
 const dom=new JSDOM(html,{url:'http://192.168.4.1/',runScripts:'dangerously',pretendToBeVisual:true,beforeParse(w){w.setInterval=()=>0;w.AbortController=AbortController;w.fetch=async(path,options={})=>{
  if(unreachable&&path==='/setup')throw Error('Radio channel changed');
@@ -29,6 +29,9 @@ function input(id,value){$(id).value=value;$(id).dispatchEvent(new w.Event('inpu
 function submit(){ $('config').dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true})); }
 (async()=>{
  await poll();await poll();
+ assert.equal($('version').textContent,'0.3.3-alpha');
+ assert.match($('portal-diagnostic').textContent,/DNS: Bereit.*Kanal: 11.*WLAN-Clients: 1.*Portalabrufe: 2.*Weiterleitungen: 3/);
+ state.portal.dns_ready=false;await poll();assert.match($('portal-diagnostic').textContent,/DNS: Nicht bereit/);state.portal.dns_ready=true;
  assert.equal($('ssid').value,'Saved WLAN');assert.equal($('server').value,'http://192.168.1.20:6017');assert.equal($('password').value,'');assert.equal($('server-key').value,'');assert.match($('key-state').textContent,/gespeichert/);assert.equal(w.document.querySelectorAll('img').length,0,'SSID must not become HTML');
  assert(!posts.some(p=>p.path==='/test'||p.path==='/online'),'Opening the portal cannot start a connection or switch modes');
  $('networks').value='Guest';$('networks').dispatchEvent(new w.Event('change'));assert.equal($('ssid').value,'Guest');assert.equal($('test').disabled,true);
@@ -43,5 +46,5 @@ function submit(){ $('config').dispatchEvent(new w.Event('submit',{bubbles:true,
  const before=posts.filter(p=>p.path==='/online').length;$('online').click();assert.equal($('handoff').hidden,false);assert.equal(posts.filter(p=>p.path==='/online').length,before);assert.match($('handoff').textContent,/mobile Daten nicht/);assert.equal($('server-link').href,'http://192.168.1.21:6017/');
  $('cancel-online').click();assert.equal($('configuration').hidden,false);$('online').click();$('confirm-online').click();await poll();assert.equal(posts.filter(p=>p.path==='/online').length,before+1);assert.equal($('confirm-online').hidden,true);assert.match($('handoff-state').textContent,/sechs Sekunden/);
  assert(!dom.serialize().includes('local-test-password'));assert(!dom.serialize().includes('local-test-key-not-a-real-server-secret'));
- console.log('Portal 0.3.2 passed: saved prefill without secrets, real DOM/network selection, save failure, staged verification, channel-loss retry, stale-test invalidation, bad key, explicit handoff and local-network guidance.');
+ console.log('Portal 0.3.3 passed: radio/HTTP diagnostics, saved prefill without secrets, real DOM/network selection, save failure, staged verification, channel-loss retry, stale-test invalidation, bad key, explicit handoff and local-network guidance.');
 })().catch(e=>{console.error(e);process.exitCode=1;}).finally(()=>w.close());

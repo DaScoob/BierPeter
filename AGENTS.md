@@ -52,3 +52,10 @@
 - Health alone is insufficient; test actual authenticated heartbeat. Do not poll game commands in provisioning mode.
 - Keep portal available on failed tests. Online handoff requires explicit confirmation and a visible local-network/server-link explanation.
 - Edit firmware/portal.html, regenerate include/Portal.h with firmware/embed-portal.py. Validate actual portal DOM with tests/portal-alpha032.cjs and portable SetupFlow with firmware/test/setup.cpp.
+
+## Firmware Alpha 0.3.3
+- Keep the SoftAP channel stable even before a station is associated. Same-channel ESP-NOW remains active; cross-channel discovery pauses during setup.
+- Foreign HTTP hosts at '/' must redirect to the canonical portal origin before serving the configuration form. Never intercept HTTPS or claim guaranteed OS popup behavior.
+- Scan only after an actual portal load and the association/page grace period. OS probes alone must not start a scan.
+- Portal diagnostics contain only counters/radio state, no credentials or visited hostnames. Serial diagnostics pause during prepared/running races.
+- Source update packages compare the expected source tree, not an assumed identical user-created commit ID.
