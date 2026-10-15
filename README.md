@@ -1,8 +1,12 @@
-# BierPeter · Alpha 0.2.2
+# BierPeter · Alpha 0.3.0
 
 Lokale Web-App mit gemeinsamer Session-Lobby, kontexterhaltenden Geräte-/Einladungslinks und einer Anbindung an das vorhandene ESP-Testfirmware-Protokoll.
 
-## Neu in 0.2.2
+## Neu in 0.3.0
+
+Kontolöschung mit Warnhinweis und Bestätigung ohne Passwortabfrage; eigene Sessions werden mitgelöscht. Bekannte Spieler, Freundschaftsanfragen, widerrufbare Freundschaften, Blockierungen und direkte Freundeseinladungen mit Host-Erlaubnis und anschließender Host-Freigabe. Wiederherstellungsschlüssel anzeigen/verbergen/kopieren; Dateiimport wartet auf ausdrückliches Entsperren. Details und Grenzen: [docs/ALPHA_030.md](docs/ALPHA_030.md).
+
+## Weiterhin enthalten aus 0.2.2
 
 Session-QR, Geräte-Scan per Kamera oder Bild, Session-Löschung, verschlüsselte Namensfreigabe an zugelassene Mitspieler, tatsächliche Peer-Funde und Korrekturen der beobachteten Mehrfenster-/Lastfehler. Details und Grenzen: [docs/ALPHA_022.md](docs/ALPHA_022.md). Lizenz: **AGPL-3.0-only**, Fremdkomponenten unter MIT beziehungsweise Apache-2.0, siehe [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
@@ -22,7 +26,7 @@ Session-QR, Geräte-Scan per Kamera oder Bild, Session-Löschung, verschlüsselt
 
 ## Private Daten und Dashboard
 
-Unter Konto zuerst den privaten Bereich einrichten: Schlüssel erzeugen, Schlüsseldatei herunterladen und privat aufbewahren, dann den Bereich anlegen. Nach Neuladen oder auf einem anderen Gerät wird diese Schlüsseldatei zum Entsperren benötigt. Ein Passwort-Reset kann den Inhalt nicht entschlüsseln. Es wird keine Kopie des Schlüssels auf dem Server gespeichert.
+Unter Konto zuerst den privaten Bereich einrichten: Schlüssel erzeugen, Schlüsseldatei herunterladen und privat aufbewahren, dann den Bereich anlegen. Nach Neuladen oder auf einem anderen Gerät wird diese Schlüsseldatei zum Entsperren benötigt. Der Dateiimport befüllt zunächst das lokale Schlüsselfeld; Anzeigen, Kopieren und anschließendes ausdrückliches Entsperren sind getrennte Schritte. Ein Passwort-Reset kann den Inhalt nicht entschlüsseln. Es wird keine Kopie des Schlüssels auf dem Server gespeichert.
 
 Eine persönliche Geräteverwaltung ist unabhängig von der Session. Entfernen aus der Session löscht keine Konto-Merkliste; Entfernen aus dem Konto verändert keine Session. Eine Merkliste beweist kein Eigentum. Gerätenamen werden nach Entsperren angezeigt und bei geöffneter Lobby für zugelassene Mitspieler verschlüsselt freigegeben. Auch Empfänger müssen ihren privaten Bereich eingerichtet und entsperrt haben. Bei noch fehlender Freigabe bleibt die Gerätekennung sichtbar.
 
@@ -89,6 +93,7 @@ python3 -m unittest discover -s tests -v
 node tests/ui-flow.cjs
 node tests/ui-alpha021.cjs
 node tests/ui-alpha022.cjs
+node tests/ui-alpha030.cjs
 node tests/qr-roundtrip.cjs
 node tests/qr-lifecycle.cjs
 python3 tests/stress-alpha022.py
@@ -101,7 +106,7 @@ node --check web/app.js
 
 Implementiert: Konten, Sessions, Host-Bestätigung, Einladungs-/Geräte-Kontext, automatische Lobby-Aktualisierung, Aufstellung, persistente Heartbeats, echte Gerätebefehle und Bestätigungen.
 
-Nicht implementiert: neue Spielfirmware, Glasbereitschaft, Race-Start und Ergebniswertung, Trainings-Countdown, Turnierpläne, JSON-Portabilität, vollständige Account-Wiederherstellung und Kontolöschung. Spielmodi sind als Vorbereitungsentwürfe wählbar. Es gibt keine simulierten Sensorereignisse oder Messzeiten.
+Nicht implementiert: neue Spielfirmware, Glasbereitschaft, Race-Start und Ergebniswertung, Trainings-Countdown, Turnierpläne, JSON-Portabilität, vollständige Account-Wiederherstellung. Kontolöschung ist seit 0.3.0 implementiert. Spielmodi sind als Vorbereitungsentwürfe wählbar. Es gibt keine simulierten Sensorereignisse oder Messzeiten.
 
 Passwort-Hashes: scrypt mit Salt. Login-Tokens: gehasht, serverseitig maximal zwölf Stunden. HttpOnly-Cookie mit SameSite=Strict; bei HTTPS `BIERPETER_SECURE_COOKIE=1` verwenden. Keine externen Ressourcen oder Analyse. Der Standardbibliothek-Server ist eine lokale Entwicklungsfassung. Vor öffentlichem Dienstbetrieb sind Hosting-Härtung, Betreiberangaben, Datenschutz und vollständige Lösch-/Exportfunktionen zu vervollständigen.
 

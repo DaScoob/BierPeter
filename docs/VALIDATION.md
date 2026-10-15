@@ -1,4 +1,31 @@
-# Validierung Alpha 0.2.2
+# Validierung Alpha 0.3.0
+
+54 API-, Migrations- und Konfigurationstests sowie fünf getrennte Sicherheitsprototyp-Tests bestanden. Vier JavaScript-/HTTP-Suiten und die QR-Decoder-/Kameralebenszyklus-Prüfungen bestehen.
+
+## Neue Abnahmefälle
+
+- Kontolöschung benötigt ausschließlich bestätigte eigene Anmeldung, keine Passwortwiederholung; fehlende Bestätigung und fehlender Anfrageschutz werden zurückgewiesen.
+- Alle eigenen Sessions werden gelöscht, auch bei einer als laufend markierten eigenen Runde. Andere Konten und Sessions bleiben erhalten. Gerätezuordnung zum gelöschten Konto verschwindet dauerhaft, fremde Positionen am Gerät bleiben erhalten. Zweite Browser-Anmeldung wird widerrufen. Keine verwaisten Fremdschlüssel.
+- Nur gemeinsame bestätigte/frühere Teilnahme erlaubt neue Freundschaftsanfragen. Annahme ist ausschließlich für den Empfänger möglich. Ablehnung, Zurückziehen, Beenden, Blockieren und Aufheben wurden geprüft.
+- Offene Anfragen und Freundschaften bleiben nach Löschen der ursprünglichen Session und Neustart erhalten. Es gibt keine zusätzliche Begegnungshistorie.
+- Zwölf konkurrierende identische Anfragen erzeugen genau eine Anfrage und verbrauchen nur eine neue Kontaktaktion. Zusätzliche Aktionen oberhalb der Grenze werden abgewiesen.
+- Freundschaften geben keine Statistik-, privaten Geräte- oder Vault-Rechte. Kontaktantworten enthalten nur IDs und Namen.
+- Ein Nicht-Host kann erst nach Host-Erlaubnis eigene Freunde einladen. Der Empfänger gelangt direkt in die Wartelobby und erhält erst nach Host-Bestätigung Zugriff. Abschalten und Blockieren widerrufen direkte Einladungen. Fremde Konten können die Einladung nicht beantworten.
+- Erzeugte, manuelle und aus Datei geladene Schlüssel können sichtbar/verdeckbar und kopierbar bedient werden. Dateiimport entsperrt noch nicht. Clipboard-Verweigerung aktiviert manuelle Auswahl. Nach Entsperren wird das Feld geleert. Die tatsächlichen API-Aufrufe enthalten keinen Rohschlüssel.
+
+`tests/ui-alpha030.cjs` nutzt echte HTTP-Endpunkte und echte Browser-Kryptografie über Node WebCrypto mit einem minimalen DOM-Adapter. Das ist keine grafische Browser- oder reale Handy-Zwischenablageprüfung. Kein Docker-Daemon und keine physische ESP-/Kamera-Prüfung in der Entwicklungsumgebung.
+
+Das Updatepaket wird zusätzlich gegen lokale Git-Repositories, einen tatsächlichen App-Server und SQLite-Sicherung getestet; Docker wird dabei durch einen Testadapter ersetzt. Konten und Einladungscode aus der Vorgängerversion bleiben beim Update erhalten. Ein frischer Bundle-Klon muss main auschecken.
+
+Der private Verschlüsselungsstand ist unverändert. Kontakt- und Einladungsmetadaten sind im aktuellen Modell für den Server lesbar. Es wird weder vollständige E2EE noch eine unabhängige Sicherheitsprüfung behauptet. Siehe ALPHA_030.md.
+
+## Lastprüfung 0.3.0
+
+Rohdaten: STRESS_030.json. 240/240 gemischte Anfragen mit 12 gleichzeitigen Arbeitern erfolgreich. Laufzeit 3,30 s; Median 133,9 ms, 95. Perzentil 464,4 ms, Maximum 882,7 ms. Bei 48 konkurrierenden Positionsansprüchen bleibt genau ein Spieler aufgestellt; keine verwaisten Positionen. 22 korrekte Anmeldungen erfolgreich. Die Werte gelten für die Entwicklungsumgebung, nicht als Echtzeitgarantie für Hardware oder Zielhost.
+
+## Vorheriger Prüfstand 0.2.2
+
+### Validierung Alpha 0.2.2
 
 42 API-, Migrations- und Konfigurationstests sowie fünf Tests des getrennten Sicherheitsprototyps bestanden. Zusätzlich bestehen drei JavaScript-/HTTP-Ablaufsuiten, ein tatsächlicher QR-Decodiertest und eine Kameralebenszyklus-Simulation.
 

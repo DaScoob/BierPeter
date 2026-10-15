@@ -28,3 +28,10 @@
 - Namen nur als pro Empfänger verschlüsselte Umschläge teilen. Öffentliche Erstidentitäten sind ohne unabhängigen Vergleich nicht serverunabhängig verifiziert.
 - Lokale Gerätefunde nur aus tatsächlichen Peer-/Nachbarmeldungen ableiten. Keine globale Server-Geräteliste als lokale Suche ausgeben.
 - Zusätzlich validieren: node tests/ui-alpha022.cjs und node tests/qr-roundtrip.cjs.
+
+## Alpha 0.3.0
+- Account deletion requires explicit confirmation, no extra password. Delete owned sessions; never transfer the host role. Preserve other accounts and unlink the deleted provider from surviving devices.
+- Friendship grants only direct-invitation eligibility, no vault/device/statistics rights. Participant invitations require host policy; new members still require approval.
+- Key import must stage the key locally for reveal/copy before explicit unlock. Clear the editor after unlock/navigation/logout. Never upload raw recovery keys.
+- Contact/invitation metadata is presently visible to the service. Do not describe it as E2EE.
+- Also validate node tests/ui-alpha030.cjs and tests/test_alpha030.py through unittest discovery.

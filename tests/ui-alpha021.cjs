@@ -42,7 +42,7 @@ async function browser(base,search='',existingJar){
  assert.equal(host.run("state.private.widgets.find(w=>w.id==='history').visible"),false);
  await host.run("action('vault-lock')");assert.equal(host.run('state.private'),null);
  await host.form('vault-unlock',{recovery:'0'.repeat(64)});assert.equal(host.run('state.private'),null);
- await host.handlers.change({target:{id:'vault-key-file',files:[{text:async()=>JSON.stringify({format:'bierpeter-private-key',account:host.run('state.user.id'),key:recovery})}]}});assert.equal(host.run("state.private.aliases['A-02']"),'Privater Garten-BierPeter');
+ await host.handlers.change({target:{id:'vault-key-file',files:[{text:async()=>JSON.stringify({format:'bierpeter-private-key',account:host.run('state.user.id'),key:recovery})}]}});assert.equal(host.run('state.private'),null);assert.equal(host.run('state.keyInput'),recovery);await host.form('vault-unlock',{recovery});assert.equal(host.run("state.private.aliases['A-02']"),'Privater Garten-BierPeter');
  assert.equal(host.run("state.private.widgets.find(w=>w.id==='history').visible"),false);
  assert.equal(host.run('state.private.widgets[2].id'),'modes');
  const snapshot=JSON.stringify(await host.run("api('/account/vault')"));assert(!snapshot.includes('history'));

@@ -24,3 +24,7 @@ Alpha 0.1 implementiert nur Konten, Session-Verwaltung und Race-Vorbereitung. Di
 ## Ergänzung 0.2.2
 
 Die Open-Source-Entscheidung ist getroffen: AGPL-3.0-only. Die zusammengeführte Änderungsagenda und Grenzen der Umsetzung sind in ALPHA_022.md dokumentiert.
+
+## Ergänzung 0.3.0
+
+Kontolöschung ohne Passwortwiederholung und ohne Host-Übergabe; Freundschaften ohne zusätzliche Datenrechte; freigegebene Freundeseinladungen mit Host-Bestätigung; lokales Anzeigen/Kopieren und ausdrückliches Entsperren des Wiederherstellungsschlüssels. Details: ALPHA_030.md.

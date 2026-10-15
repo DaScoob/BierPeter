@@ -16,13 +16,14 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
+import social
 
 ROOT = Path(__file__).parent
 DB = Path(os.environ.get('BIERPETER_DB', str(ROOT / 'data/bierpeter.sqlite3')))
 SECURE = os.environ.get('BIERPETER_SECURE_COOKIE', '0') == '1'
 TTL = 12 * 3600
 ONLINE_WINDOW = 15
-VERSION = '0.2.2-alpha'
+VERSION = '0.3.0-alpha'
 AUTH_ATTEMPTS = {}
 AUTH_LOCK = threading.Lock()
 WRITE_LOCK = threading.Lock()
@@ -67,19 +68,28 @@ def init():
         CREATE INDEX IF NOT EXISTS races_session ON races(session);
         CREATE INDEX IF NOT EXISTS members_user ON members(user);
         CREATE INDEX IF NOT EXISTS commands_device ON hardware_commands(device,state);
+        CREATE TABLE IF NOT EXISTS friendships(a TEXT REFERENCES users(id),b TEXT REFERENCES users(id),requester TEXT REFERENCES users(id),status TEXT NOT NULL,updated REAL NOT NULL,PRIMARY KEY(a,b),CHECK(a<b));
+        CREATE TABLE IF NOT EXISTS blocks(owner TEXT REFERENCES users(id),target TEXT REFERENCES users(id),PRIMARY KEY(owner,target));
+        CREATE TABLE IF NOT EXISTS session_invites(id TEXT PRIMARY KEY,session TEXT REFERENCES sessions(id),sender TEXT REFERENCES users(id),recipient TEXT REFERENCES users(id),status TEXT,created REAL,UNIQUE(session,sender,recipient));
+        CREATE INDEX IF NOT EXISTS invites_recipient ON session_invites(recipient,status);
+        CREATE INDEX IF NOT EXISTS friendships_b ON friendships(b);
+        CREATE TABLE IF NOT EXISTS social_limits(user TEXT REFERENCES users(id),kind TEXT,started REAL,count INTEGER,PRIMARY KEY(user,kind));
         ''')
+        legacy_provider = 'provider' not in [r['name'] for r in c.execute('PRAGMA table_info(devices)')]
         for table, column, declaration in (
             ('sessions', 'active_race', 'TEXT'),
             ('sessions', 'public_url', "TEXT NOT NULL DEFAULT ''"),
             ('devices', 'position', 'INTEGER NOT NULL DEFAULT 0'),
             ('devices', 'provider', 'TEXT'),
             ('hardware_commands', 'session', 'TEXT'),
+            ('sessions', 'allow_member_invites', 'INTEGER NOT NULL DEFAULT 0'),
         ):
             if column not in [r['name'] for r in c.execute('PRAGMA table_info(' + table + ')')]:
                 c.execute('ALTER TABLE ' + table + ' ADD COLUMN ' + column + ' ' + declaration)
         # Preserve the previously displayed sequence as the initial explicit order.
         for row in c.execute('SELECT id FROM sessions'):
-            c.execute('UPDATE devices SET provider=(SELECT host FROM sessions WHERE id=?) WHERE session=? AND provider IS NULL',(row['id'],row['id']))
+            if legacy_provider:
+                c.execute('UPDATE devices SET provider=(SELECT host FROM sessions WHERE id=?) WHERE session=? AND provider IS NULL',(row['id'],row['id']))
             for index, d in enumerate(c.execute('SELECT id FROM devices WHERE session=? ORDER BY position,id', (row['id'],)).fetchall()):
                 c.execute('UPDATE devices SET position=? WHERE session=? AND id=?', (index, row['id'], d['id']))
             if not c.execute('SELECT active_race FROM sessions WHERE id=?', (row['id'],)).fetchone()['active_race']:
@@ -251,7 +261,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.headers_common()
             self.send_header('Content-Type','application/gzip')
-            self.send_header('Content-Disposition','attachment; filename="BierPeter-0.2.2-source.tar.gz"')
+            self.send_header('Content-Disposition','attachment; filename="BierPeter-'+VERSION+'-source.tar.gz"')
             self.send_header('Content-Length',str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -454,6 +464,20 @@ class Handler(BaseHTTPRequestHandler):
             return {}, 'bp_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0'
         if path == '/api/me' and method == 'GET':
             return u, None
+        if path == '/api/account/delete' and method == 'POST':
+            if d.get('confirm') is not True:
+                raise Error(400,'Löschung muss ausdrücklich bestätigt werden')
+            social.delete_account(c,u['id'])
+            with AUTH_LOCK:
+                AUTH_ATTEMPTS.pop(('account',u['name'].casefold()),None)
+            return {}, 'bp_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0'
+        if path == '/api/social' and method == 'GET':
+            return social.snapshot(c,u['id']), None
+        if path == '/api/social/friend' and method == 'POST':
+            social.contact_action(c,u['id'],d,Error)
+            return {}, None
+        if path == '/api/social/invitation' and method == 'POST':
+            return social.answer_invite(c,u['id'],d,Error), None
         if path == '/api/account/devices':
             if method == 'GET':
                 return [hardware_status(c, x['device']) for x in c.execute('SELECT device FROM managed_devices WHERE user=? ORDER BY device', (u['id'],))], None
@@ -492,7 +516,10 @@ class Handler(BaseHTTPRequestHandler):
                 if d.get('device'):
                     add_device(c, sid, device_id(d['device']), u['id'])
                 return {'id': sid}, None
-            return [dict(x) for x in c.execute('SELECT s.*,m.status,m.expires FROM sessions s JOIN members m ON m.session=s.id WHERE m.user=?', (u['id'],))], None
+            sessions=[dict(x) for x in c.execute('SELECT s.*,m.status,m.expires FROM sessions s JOIN members m ON m.session=s.id WHERE m.user=?', (u['id'],))]
+            for session in sessions:
+                if session['host']!=u['id'] and (session['status']!='accepted' or not session['allow_member_invites']):session.pop('code',None)
+            return sessions, None
         if path == '/api/join' and method == 'POST':
             s = c.execute('SELECT * FROM sessions WHERE code=?', (text(d, 'code'),)).fetchone()
             if not s:
@@ -547,6 +574,7 @@ class Handler(BaseHTTPRequestHandler):
                 for r in s['races']:
                     r['slots'] = [dict(x) for x in c.execute('SELECT * FROM slots WHERE race=?', (r['id'],))]
                     r['lineup_issues'] = lineup_issues(c, r)
+                if s['host']!=u['id'] and not s['allow_member_invites']:s.pop('code',None)
                 return s, None
             action = parts[3] if len(parts) == 4 else ''
             if method != 'POST':
@@ -558,16 +586,18 @@ class Handler(BaseHTTPRequestHandler):
                 if m['status'] != 'accepted' and (m['status'] != 'pending' or m['expires'] < time.time()):
                     c.execute("UPDATE members SET status='pending',expires=? WHERE session=? AND user=?", (time.time()+900, sid, u['id']))
                 return {}, None
-            s = self.access(c, sid, u, host=action not in ('device', 'device-remove', 'names'))
+            s = self.access(c, sid, u, host=action not in ('device', 'device-remove', 'names', 'invite'))
             if action == 'delete':
                 if c.execute("SELECT 1 FROM races WHERE session=? AND state='running'",(sid,)).fetchone():
                     raise Error(409, 'Laufende Runde zuerst regulär beenden oder abbrechen')
-                c.execute('DELETE FROM shared_names WHERE session=?',(sid,))
-                c.execute('DELETE FROM slots WHERE race IN(SELECT id FROM races WHERE session=?)',(sid,))
-                for table in ('races','devices','members'):
-                    c.execute('DELETE FROM '+table+' WHERE session=?',(sid,))
-                c.execute('DELETE FROM hardware_commands WHERE session=?',(sid,))
-                c.execute('DELETE FROM sessions WHERE id=?',(sid,))
+                social.delete_session(c,sid)
+            elif action == 'invite':
+                social.create_invite(c,u['id'],sid,d.get('user'),Error)
+            elif action == 'invite-policy':
+                if type(d.get('allow')) is not bool:raise Error(400,'Ungültige Einladungseinstellung')
+                c.execute('UPDATE sessions SET allow_member_invites=? WHERE id=?',(int(d['allow']),sid))
+                if not d['allow']:
+                    c.execute('DELETE FROM session_invites WHERE session=? AND sender<>?',(sid,u['id']))
             elif action == 'names':
                 row = c.execute('SELECT revision FROM private_vaults WHERE user=?',(u['id'],)).fetchone()
                 if not row or d.get('revision') != row['revision']:
@@ -594,6 +624,8 @@ class Handler(BaseHTTPRequestHandler):
                 if status == 'accepted' and m['status'] == 'pending' and m['expires'] < time.time():
                     raise Error(409, 'Anfrage abgelaufen; erneute Anfrage erforderlich')
                 c.execute('UPDATE members SET status=?,expires=NULL WHERE session=? AND user=?', (status, sid, target))
+                if status == 'accepted':
+                    c.execute("UPDATE session_invites SET status='accepted' WHERE session=? AND recipient=? AND status='pending'",(sid,target))
                 if status != 'accepted':
                     c.execute('DELETE FROM shared_names WHERE session=? AND (provider=? OR recipient=?)',(sid,target,target))
                     c.execute('DELETE FROM slots WHERE user=? AND race IN(SELECT id FROM races WHERE session=?)', (target, sid))

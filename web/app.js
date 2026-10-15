@@ -2,10 +2,54 @@
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const modes={duel:'1 gegen 1',relay:'Staffellauf',marathon:'BierMarathon',general:'Generalbierjunge',olympics:'BierOlympiade',training:'Training'};
-const state={user:null,sessions:[],session:null,race:null,view:'home',auth:'login',device:'',busy:false,error:'',managed:[],private:null,vaultKey:null,vaultRevision:0,recovery:'',dashboardEdit:false,sharedNames:{},sharedFingerprint:'',shareCache:{},shareError:'',polling:false};
+const state={user:null,sessions:[],session:null,race:null,view:'home',auth:'login',device:'',busy:false,error:'',managed:[],private:null,vaultKey:null,vaultRevision:0,recovery:'',dashboardEdit:false,sharedNames:{},sharedFingerprint:'',shareCache:{},shareError:'',polling:false,social:{friends:[],incoming:[],outgoing:[],known:[],blocked:[],invitations:[]},keyInput:'',keyVisible:{unlock:false,generated:false}};
 const button=(label,action,minor=false)=>`<button type="button" class="btn ${minor?'outline':''}" data-action="${esc(action)}">${label}</button>`;
-const title=(t,d='')=>`<div class="micro">BierPeter · Alpha 0.2.2</div><h1 class="title">${t}</h1><p class="desc">${d}</p>`;
+const title=(t,d='')=>`<div class="micro">BierPeter · Alpha 0.3.0</div><h1 class="title">${t}</h1><p class="desc">${d}</p>`;
 const field=(name,label,placeholder='',type='text',max=80,value='')=>`<label class="field"><span>${label}</span><input name="${name}" type="${type}" required maxlength="${max}" placeholder="${esc(placeholder)}" value="${esc(value)}" autocomplete="${type==='password'?(state.auth==='register'?'new-password':'current-password'):'off'}"></label>`;
+function resetSocial(){state.social={friends:[],incoming:[],outgoing:[],known:[],blocked:[],invitations:[]};}
+async function loadSocial(){const id=state.user?.id,next=await api('/social');if(state.user?.id===id)state.social=next;}
+function friendControl(id){
+  const social=state.social;
+  if(social.blocked.some(p=>p.id===id))return '<span class="tag">Blockiert</span>';
+  if(social.friends.some(p=>p.id===id))return '<span class="tag">Befreundet</span>';
+  if(social.outgoing.some(p=>p.id===id))return '<span class="tag">Angefragt</span>';
+  if(social.incoming.some(p=>p.id===id))return button('Anfrage ansehen','profile',true);
+  return button('Freundschaft anfragen','friend:request:'+id,true);
+}
+function socialInbox(){
+  const s=state.social;
+  return `${s.incoming.length?`<div class="panel"><p>${s.incoming.length} neue Freundschaftsanfrage(n).</p>${button('Anfragen ansehen','profile',true)}</div>`:''}`+
+    s.invitations.map(i=>`<article class="panel"><h3 class="section-title">${esc(i.title)}</h3><p class="section-sub">Einladung von ${esc(i.sender_name)}. Der Host bestätigt den Beitritt.</p><div class="contact-actions">${button('Zur eingeladenen Lobby','invitation:accept:'+i.id)}${button('Einladung ablehnen','invitation:decline:'+i.id,true)}</div></article>`).join('');
+}
+function contactsPanel(){
+  const s=state.social,row=(person,actions)=>`<div class="contact-row"><strong>${esc(person.name)}</strong><div class="contact-actions">${actions}</div></div>`;
+  return `<section class="panel" id="contacts"><div class="row"><h2 class="section-title">Freunde & bekannte Spieler</h2>${button('Aktualisieren','contacts-refresh',true)}</div><p class="section-sub">Eine Freundschaft erlaubt Einladungen. Statistiken und persönliche Geräte bleiben privat.</p><p class="footnote">Kontakt- und Einladungsbeziehungen sind in dieser Alpha für den Serverbetreiber erkennbar.</p>`+
+    `<h3>Eingehende Anfragen</h3>${s.incoming.map(p=>row(p,button('Annehmen','friend:accept:'+p.id)+button('Ablehnen','friend:decline:'+p.id,true)+button('Blockieren','friend:block:'+p.id,true))).join('')||'<p class="section-sub">Keine offenen Anfragen.</p>'}`+
+    `<h3>Meine Freunde</h3>${s.friends.map(p=>row(p,button('Freundschaft beenden','friend:remove:'+p.id,true)+button('Blockieren','friend:block:'+p.id,true))).join('')||'<p class="section-sub">Noch keine Freunde hinzugefügt.</p>'}`+
+    `<h3>Gesendete Anfragen</h3>${s.outgoing.map(p=>row(p,button('Zurückziehen','friend:cancel:'+p.id,true))).join('')||'<p class="section-sub">Keine offenen Anfragen.</p>'}`+
+    `<h3>Aus gemeinsamen Sessions bekannt</h3>${s.known.map(p=>row(p,friendControl(p.id)+button('Blockieren','friend:block:'+p.id,true))).join('')||'<p class="section-sub">Aktuell keine weiteren gemeinsamen Teilnehmer.</p>'}`+
+    `<details><summary>Blockierte Kontakte (${s.blocked.length})</summary>${s.blocked.map(p=>row(p,button('Blockierung aufheben','friend:unblock:'+p.id,true))).join('')||'<p class="section-sub">Keine blockierten Kontakte.</p>'}<p class="footnote">Aufheben stellt keine Freundschaft wieder her. Eine Blockierung beendet keine gemeinsame Session.</p></details></section>`+socialInbox();
+}
+function invitationPanel(s){
+  const allowed=isHost()||!!s.allow_member_invites,available=state.social.friends.filter(p=>!s.members.some(m=>m.id===p.id&&m.status==='accepted'));
+  return `<details><summary>Spieler einladen</summary>${isHost()?`<label class="policy-choice"><input type="checkbox" id="invite-policy" ${s.allow_member_invites?'checked':''}> Teilnehmer dürfen eigene Freunde einladen</label><p class="footnote">Jeder neue Teilnehmer benötigt weiterhin eine Host-Freigabe.</p>`:''}`+
+    (allowed?`<label class="field"><span>Einladungslink</span><input id="invite-link" readonly value="${esc(inviteURL(s))}"></label>${s.public_url_error?`<p class="error">${esc(s.public_url_error)}</p>`:''}${button('Einladungslink kopieren','copy',true)}<div class="invite-qr">${globalThis.BierPeterQR?BierPeterQR.svg(inviteURL(s)):''}</div><p class="footnote">Nach Anmeldung oder Registrierung öffnet der Link direkt die wartende Lobby.</p>${!s.public_url&&['localhost','127.0.0.1','[::1]'].includes(new URL(location.origin).hostname)?'<p class="error">Diese Adresse ist nur auf diesem Rechner erreichbar. Vor dem Teilen eine LAN-Adresse einstellen.</p>':''}`+
+      (available.length?`<form data-form="friend-invite"><label class="field"><span>Freund direkt einladen</span><select name="user">${available.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></label><button class="btn">Einladung senden</button></form>`:'<p class="section-sub">Aktuell keine weiteren Freunde für eine Einladung verfügbar. Freunde werden unter Konto verwaltet.</p>'):
+      '<p class="section-sub">Der Host hat Einladungen durch Teilnehmer nicht freigegeben.</p>')+
+    (isHost()?`<form data-form="public-url">${field('public_url','Erreichbare Serveradresse','http://192.168.…:6017','url',300,s.public_url)}<button class="btn outline">Einladungsadresse speichern</button></form>`:'')+'</details>';
+}
+function keyEditor(kind){
+  const generated=kind==='generated',id=generated?'generated-key':'recovery-key';
+  return `<label class="field"><span>${generated?'Neuer Wiederherstellungsschlüssel':'Wiederherstellungsschlüssel (64 Hex-Zeichen aus der Schlüsseldatei)'}</span><input id="${id}" ${generated?'readonly':'name="recovery" required'} type="${state.keyVisible[kind]?'text':'password'}" autocomplete="off" spellcheck="false" autocapitalize="off" maxlength="64"></label><div class="contact-actions">${button(state.keyVisible[kind]?'Verbergen':'Anzeigen','key-toggle:'+kind,true)}${button('Kopieren','key-copy:'+kind,true)}</div>`;
+}
+function clearKeyInput(){state.keyInput='';state.keyVisible.unlock=false;const input=$('#recovery-key');if(input){input.value='';input.type='password';}}
+async function copyKey(kind){
+  const input=$(kind==='generated'?'#generated-key':'#recovery-key');
+  const value=input?.value||(kind==='generated'?state.recovery:state.keyInput);
+  if(!/^[a-f0-9]{64}$/i.test(value))throw new Error('Zuerst einen gültigen Wiederherstellungsschlüssel eingeben oder laden.');
+  try{await navigator.clipboard.writeText(value);notice('Wiederherstellungsschlüssel kopiert.');}
+  catch{state.keyVisible[kind]=true;if(kind==='unlock')state.keyInput=value;render();const field=$(kind==='generated'?'#generated-key':'#recovery-key');field?.focus?.();field?.select?.();notice('Zwischenablage nicht verfügbar. Der Schlüssel ist zum manuellen Kopieren sichtbar und markiert.');}
+}
 function normalizeDevice(s){const compact=String(s).replace(/[:.\- ]/g,'');return /^[a-f\d]{12}$/i.test(compact)?compact.toUpperCase():String(s);}
 function context(search=location.search){
   const p=new URLSearchParams(search), raw=search.replace(/^\?/,'');
@@ -110,12 +154,14 @@ async function enterSession(id,{background=false}={}){
   if(s.membership==='accepted'&&state.device){await api('/sessions/'+s.id+'/device',{device:state.device});state.device='';s=await api('/sessions/'+s.id);}
   if(s.membership==='accepted'&&state.private){try{await syncNames(s);}catch(error){state.shareError=error.message;}}
   if(background&&(state.busy||state.view!=='lobby'||state.session?.id!==id||state.user?.id!==userID))return false;
+  await loadSocial();
+  if(background&&(state.busy||state.view!=='lobby'||state.session?.id!==id||state.user?.id!==userID))return false;
   state.session=s;state.view='lobby';
   keepLobbyURL(s);render();
 }
 async function resume(){
   const c=context();state.device=c.device||state.device;
-  state.sessions=await api('/sessions');
+  state.sessions=await api('/sessions');await loadSocial();
   let sid=c.session;
   if(c.join){const result=await api('/join',{code:c.join});sid=result.id;}
   if(sid)return enterSession(sid);
@@ -127,7 +173,7 @@ function auth(){
     `<div class="tabs">${button('Anmelden','login',state.auth!=='login')}${button('Konto erstellen','register',state.auth!=='register')}</div><form data-form="auth">${field('name','Benutzername','z. B. Alex','text',40)}${field('password','Passwort',state.auth==='register'?'Mindestens 12 Zeichen':'','password',128)}<button class="btn">${state.auth==='register'?'Registrieren und fortfahren':'Anmelden und fortfahren'}</button></form><p class="footnote">Ein Konto erfordert kein eigenes Gerät. Ein notwendiges Sitzungscookie hält die Anmeldung; kein Tracking.</p>`;
 }
 function home(){
-  return title('Zusammen in eine Lobby.','Eine Session ist die Gruppe. Races sind die einzelnen Spielrunden darin.')+
+  return title('Zusammen in eine Lobby.','Eine Session ist die Gruppe. Races sind die einzelnen Spielrunden darin.')+socialInbox()+
     `<div class="stack">${button('Neue Session eröffnen','create')}${button('Einladung oder Geräte-Link öffnen','link',true)}</div><h2 class="section-title section-gap">Meine Sessions</h2>`+
     (state.sessions.length?state.sessions.map(s=>`<article class="panel"><div class="row"><div><h3 class="section-title">${esc(s.title)}</h3><span class="tag ${s.status==='accepted'?'':'amber'}">${s.host===state.user.id?'Host':({accepted:'Dabei',pending:'Angefragt',rejected:'Abgelehnt',removed:'Entfernt'}[s.status])}</span></div><div>${button('Zur Lobby','session:'+s.id,true)}${s.host===state.user.id?button('Session löschen','delete-session:'+s.id,true):''}</div></div></article>`).join(''):'<div class="panel empty">Noch keine Session. Eine Gruppe eröffnen oder eine Einladung verwenden.</div>');
 }
@@ -144,8 +190,8 @@ function waiting(){
 function inviteURL(s=state.session){return (s.public_url||location.origin)+location.pathname+'?join='+encodeURIComponent(s.code);}
 function roster(){
   const s=state.session,accepted=s.members.filter(m=>m.status==='accepted');
-  return `<section class="panel" id="group"><div class="row"><h2 class="section-title">1 · Unsere Spielgruppe</h2><span class="tag">${accepted.length} dabei</span></div><p class="section-sub">Teilnehmer und BierPeter werden gemeinsam in dieser Lobby vorbereitet.</p><div class="list-roster">${accepted.map(m=>`<div class="list-row"><div class="initial">${esc(m.name[0])}</div><div class="grow"><strong>${esc(m.name)}</strong><small>${m.id===s.host?'Host':m.id===state.user.id?'Angemeldet':'Dabei'}</small></div>${isHost()&&m.id!==s.host?`<button class="tinybtn" data-action="remove:${m.id}">Entfernen</button>`:''}</div>`).join('')}</div>
-    <details><summary>Spieler einladen</summary><label class="field"><span>Einladungslink</span><input id="invite-link" readonly value="${esc(inviteURL(s))}"></label>${s.public_url_error?`<p class="error">${esc(s.public_url_error)}</p>`:''}${button('Einladungslink kopieren','copy',true)}<div class="invite-qr">${globalThis.BierPeterQR?BierPeterQR.svg(inviteURL(s)):''}</div><p class="footnote">Auch nach einer Registrierung führt dieser Link direkt in die wartende Lobby.</p>${!s.public_url&&['localhost','127.0.0.1','[::1]'].includes(new URL(location.origin).hostname)?'<p class="error">Diese Adresse ist nur auf diesem Rechner erreichbar. Vor dem Teilen eine LAN-Adresse einstellen.</p>':''}${isHost()?`<form data-form="public-url">${field('public_url','Erreichbare Serveradresse','http://192.168.…:6017','url',300,s.public_url)}<button class="btn outline">Einladungsadresse speichern</button></form>`:''}</details>
+  return `<section class="panel" id="group"><div class="row"><h2 class="section-title">1 · Unsere Spielgruppe</h2><span class="tag">${accepted.length} dabei</span></div><p class="section-sub">Teilnehmer und BierPeter werden gemeinsam in dieser Lobby vorbereitet.</p><div class="list-roster">${accepted.map(m=>`<div class="list-row"><div class="initial">${esc(m.name[0])}</div><div class="grow"><strong>${esc(m.name)}</strong><small>${m.id===s.host?'Host':m.id===state.user.id?'Angemeldet':'Dabei'}</small></div>${m.id!==state.user.id?friendControl(m.id):''}${isHost()&&m.id!==s.host?`<button class="tinybtn" data-action="remove:${m.id}">Entfernen</button>`:''}</div>`).join('')}</div>
+    ${invitationPanel(s)}
     ${isHost()?s.members.filter(m=>m.status==='pending').map(m=>`<div class="request"><strong>${esc(m.name)}</strong><span class="section-sub">${m.expires<Date.now()/1000?'Anfrage abgelaufen':'möchte mitspielen'}</span><div class="row">${m.expires>Date.now()/1000?button('Annehmen','accept:'+m.id):''}${button('Ablehnen','reject:'+m.id,true)}</div></div>`).join(''):''}</section>`;
 }
 function raceConfig(){
@@ -194,7 +240,7 @@ function validatePrivate(d){
   if(Object.values(d.aliases).some(v=>typeof v!=='string'||v.length>60))throw new Error('Ungültige Gerätenamen.');
   if(d.results.some(r=>!r||typeof r.time_ms!=='number'||!Number.isFinite(r.time_ms)||r.time_ms<0||typeof r.mode!=='string'||typeof r.date!=='string'))throw new Error('Ungültige private Ergebnisdaten.');
 }
-function lockVault(){state.sharedNames={};state.shareCache={};state.fingerprints={};state.shareError='';state.private=null;state.vaultKey=null;state.recovery='';state.vaultRevision=0;state.dashboardEdit=false;}
+function lockVault(){clearKeyInput();state.keyVisible.generated=false;state.sharedNames={};state.shareCache={};state.fingerprints={};state.shareError='';state.private=null;state.vaultKey=null;state.recovery='';state.vaultRevision=0;state.dashboardEdit=false;}
 async function savePrivate(next){
   if(!state.vaultKey)throw new Error('Private Daten zuerst entsperren.');validatePrivate(next);
   const envelope=await BierPeterVault.seal(state.vaultKey,state.user.id,next);
@@ -204,7 +250,7 @@ async function savePrivate(next){
 async function unlockPrivate(recovery){
   const stored=await api('/account/vault');if(!stored.envelope)throw new Error('Noch keine privaten Daten angelegt.');
   const key=await BierPeterVault.importRecovery(recovery.trim()),data=await BierPeterVault.open(key,state.user.id,stored.envelope);
-  validatePrivate(data);state.vaultKey=key;state.private=data;state.vaultRevision=stored.revision;await ensureIdentity();render();
+  validatePrivate(data);state.vaultKey=key;state.private=data;state.vaultRevision=stored.revision;clearKeyInput();render();await ensureIdentity();render();
 }
 function downloadRecovery(){
   if(!state.recovery)throw new Error('Zuerst einen Wiederherstellungsschlüssel erzeugen.');
@@ -231,13 +277,14 @@ function dashboard(){
 function profile(){
   const unlocked=!!state.private,available=BierPeterVault.available();
   return title('Mein Konto',esc(state.user.name))+
-    `<section class="panel" id="private-data"><h2 class="section-title">Private Daten</h2>${unlocked?`<span class="tag">Im Browser entsperrt</span><p class="section-sub">Private Gerätenamen und Dashboard-Einstellungen liegen verschlüsselt auf dem Server. Der Schlüssel bleibt in diesem Browser bis zum Sperren oder Neuladen.</p>${button('Private Daten sperren','vault-lock',true)}`:!available?'<p class="section-sub">Zum Entsperren privater Daten wird HTTPS oder der Zugriff über localhost benötigt.</p>':`<label class="field"><span>Wiederherstellungsschlüssel aus Datei laden</span><input type="file" id="vault-key-file" accept="application/json,.json"></label><form data-form="vault-unlock"><label class="field"><span>Wiederherstellungsschlüssel (64 Hex-Zeichen aus der Schlüsseldatei)</span><input name="recovery" type="password" required autocomplete="off" maxlength="64"></label><button class="btn">Private Daten entsperren</button></form><details><summary>Privaten Bereich erstmals einrichten</summary><p class="section-sub">Ein eigener Schlüssel schützt die Daten. Ohne Schlüsseldatei sind sie nach einem Browserwechsel oder Neuladen nicht wiederherstellbar. Das Anmeldepasswort ersetzt den Schlüssel nicht.</p>${state.recovery?button('1 · Schlüsseldatei herunterladen','vault-download')+button('2 · Schlüssel gesichert, Bereich anlegen','vault-confirm',true):button('Wiederherstellungsschlüssel erzeugen','vault-create',true)}</details>`}</section>`+
+    `<section class="panel" id="private-data"><h2 class="section-title">Private Daten</h2>${unlocked?`<span class="tag">Im Browser entsperrt</span><p class="section-sub">Private Gerätenamen und Dashboard-Einstellungen liegen verschlüsselt auf dem Server. Der Schlüssel bleibt in diesem Browser bis zum Sperren oder Neuladen.</p>${button('Private Daten sperren','vault-lock',true)}`:!available?'<p class="section-sub">Zum Entsperren privater Daten wird HTTPS oder der Zugriff über localhost benötigt.</p>':`<label class="field"><span>Wiederherstellungsschlüssel aus Datei laden</span><input type="file" id="vault-key-file" accept="application/json,.json"></label><form data-form="vault-unlock">${keyEditor('unlock')}<button class="btn">Private Daten entsperren</button></form><details ${state.recovery?'open':''}><summary>Privaten Bereich erstmals einrichten</summary><p class="section-sub">Ein eigener Schlüssel schützt die Daten. Ohne Schlüsseldatei sind sie nach einem Browserwechsel oder Neuladen nicht wiederherstellbar. Das Anmeldepasswort ersetzt den Schlüssel nicht.</p>${state.recovery?keyEditor('generated')+button('1 · Schlüsseldatei herunterladen','vault-download')+button('2 · Schlüssel gesichert, Bereich anlegen','vault-confirm',true):button('Wiederherstellungsschlüssel erzeugen','vault-create',true)}</details>`}</section>`+
     `<section class="panel"><h2 class="section-title">Meine BierPeter</h2><p class="section-sub">Geräte merken, benennen und entfernen. Für Namen zuerst den privaten Bereich oben entsperren. Namen bereitgestellter Geräte werden dann verschlüsselt mit zugelassenen Mitspielern geteilt.</p>${state.managed.map(d=>`<article class="sensor-device"><div class="row"><div><strong>${esc(deviceName(d.id))}</strong><p class="section-sub">${esc(d.id)} · ${statusLabel(d)}</p></div><button class="tinybtn" data-action="managed-delete:${d.id}">Aus Konto entfernen</button></div>${unlocked?`<form data-form="managed-name"><input type="hidden" name="device" value="${esc(d.id)}">${field('name','Name des BierPeters','z. B. Garten-BierPeter','text',60,state.private.aliases[d.id]||'')}<button class="btn outline">Namen speichern</button></form>`:button('Zum Umbenennen entsperren','unlock-for-name',true)}</article>`).join('')||'<p class="section-sub">Noch keine Geräte gemerkt.</p>'}<details><summary>Gerät zur eigenen Verwaltung hinzufügen</summary>${scanControls('account')}<form data-form="managed-add">${field('device','Gerätekennung oder Link','','text',500)}<button class="btn">Gerät merken</button></form></details></section>`+
+    contactsPanel()+
     (unlocked?dashboard():'<section class="panel"><h2 class="section-title">Statistik-Dashboard</h2><p class="section-sub">Private Daten entsperren, um Widgets anzuordnen und Ergebnisse anzuzeigen.</p></section>')+
-    `<section class="panel"><h2 class="section-title">Sicherheitsstand der Alpha</h2><p class="section-sub">Der private Speicher ist ein Verschlüsselungsprototyp. Die laufende Lobby verwendet weiterhin den bisherigen Server. Getrennte Account-/Race-Dienste werden separat erprobt; eine vollständige Ende-zu-Ende-Verschlüsselung der Lobby ist noch nicht freigegeben.</p></section>${button('Abmelden','logout',true)}`;
+    `<section class="panel"><h2 class="section-title">Sicherheitsstand der Alpha</h2><p class="section-sub">Der private Speicher ist ein Verschlüsselungsprototyp. Die laufende Lobby verwendet weiterhin den bisherigen Server. Getrennte Account-/Race-Dienste werden separat erprobt; eine vollständige Ende-zu-Ende-Verschlüsselung der Lobby ist noch nicht freigegeben.</p></section><section class="panel"><h2 class="section-title">Konto löschen</h2><p class="section-sub">Das Konto, alle eigenen Sessions, private Daten, persönliche Geräteliste, Freundschaften und Anfragen werden unwiderruflich gelöscht. Geräte und Konten anderer Spieler bleiben bestehen. Es erfolgt keine Host-Übergabe.</p>${button('Konto endgültig löschen','delete-account',true)}</section>${button('Abmelden','logout',true)}`;
 }
 
-function legal(privacy){return title(privacy?'Datenschutz der Alpha':'Impressum & KI-Hinweis')+`<div class="panel legal">${privacy?'<p>Diese lokale Alpha speichert Benutzernamen, gesalzene Passwort-Hashes, Login-Sitzungen sowie Sessions, Beitrittsanfragen, Geräte und Race-Aufstellungen in SQLite.</p><p>Geräte übermitteln Firmwareversion, WLAN-Kanal und Signalstärke, Laufzeit, Peer-Status und Ereignisse. Ein aktueller Heartbeat kennzeichnet die Serververbindung, nicht die Glasbereitschaft.</p><p>Private Gerätenamen und Dashboard-Einstellungen können clientseitig verschlüsselt gespeichert werden. Der Wiederherstellungsschlüssel wird nicht an den Server übertragen. Geteilte Gerätenamen werden für jeden zugelassenen Empfänger separat verschlüsselt. Öffentliche Schlüssel und Zuordnungsmetadaten liegen auf dem Server. Benutzernamen und übrige Lobby-Daten liegen in dieser Alpha weiterhin im bisherigen Klartextmodell vor.</p><p>Ein notwendiges HttpOnly-Cookie hält die Anmeldung für serverseitig höchstens zwölf Stunden. Keine Analyse, kein localStorage und keine externen Ressourcen. Links erhalten den Einstiegskontext auch beim Neuladen. Die Anwendung protokolliert keine HTTP-Anfragen.</p><p>Verantwortlicher, Rechtsgrundlagen, Aufbewahrung, Export und Löschung sind vor öffentlichem Betrieb zu vervollständigen.</p>':'<p>Mit Unterstützung künstlicher Intelligenz erstellt.</p><p>Lokale Entwicklungsfassung. Anbieterangaben sind vor öffentlicher Bereitstellung zu ergänzen. Eigener Programmcode: AGPL-3.0-only. QR-Bibliotheken: MIT. <a href="/source.tar.gz">Quellcode dieser Version herunterladen</a>; die POMPUI-Anbindung ist noch nicht veröffentlicht.</p>'}</div>${button('Zurück','back',true)}`;}
+function legal(privacy){return title(privacy?'Datenschutz der Alpha':'Impressum & KI-Hinweis')+`<div class="panel legal">${privacy?'<p>Diese lokale Alpha speichert Benutzernamen, gesalzene Passwort-Hashes, Login-Sitzungen sowie Sessions, Beitrittsanfragen, Geräte und Race-Aufstellungen in SQLite. Kontakte, Blockierungen und direkte Einladungen werden mit Konto-IDs, Zustand und nötigen Zeit-/Zählerwerten gespeichert; diese Beziehungsmetadaten sind serverseitig lesbar. Freundschaft erzeugt keine zusätzliche Freigabe privater Statistiken oder Geräte.</p><p>Geräte übermitteln Firmwareversion, WLAN-Kanal und Signalstärke, Laufzeit, Peer-Status und Ereignisse. Ein aktueller Heartbeat kennzeichnet die Serververbindung, nicht die Glasbereitschaft.</p><p>Private Gerätenamen und Dashboard-Einstellungen können clientseitig verschlüsselt gespeichert werden. Der Wiederherstellungsschlüssel wird nicht an den Server übertragen. Geteilte Gerätenamen werden für jeden zugelassenen Empfänger separat verschlüsselt. Öffentliche Schlüssel und Zuordnungsmetadaten liegen auf dem Server. Benutzernamen und übrige Lobby-Daten liegen in dieser Alpha weiterhin im bisherigen Klartextmodell vor.</p><p>Ein notwendiges HttpOnly-Cookie hält die Anmeldung für serverseitig höchstens zwölf Stunden. Keine Analyse, kein localStorage und keine externen Ressourcen. Links erhalten den Einstiegskontext auch beim Neuladen. Die Anwendung protokolliert keine HTTP-Anfragen.</p><p>Kontolöschung benötigt eine ausdrückliche Bestätigung und löscht die Live-Kontodaten samt eigenen Sessions. Bereits angelegte lokale Sicherungskopien werden gesondert aufbewahrt. Verantwortlicher, Rechtsgrundlagen, Aufbewahrung und Export sind vor öffentlichem Betrieb zu vervollständigen.</p>':'<p>Mit Unterstützung künstlicher Intelligenz erstellt.</p><p>Lokale Entwicklungsfassung. Anbieterangaben sind vor öffentlicher Bereitstellung zu ergänzen. Eigener Programmcode: AGPL-3.0-only. QR-Bibliotheken: MIT. <a href="/source.tar.gz">Quellcode dieser Version herunterladen</a>; die POMPUI-Anbindung ist noch nicht veröffentlicht.</p>'}</div>${button('Zurück','back',true)}`;}
 function render(){
   let html;
   if(state.view==='privacy'||state.view==='imprint')html=legal(state.view==='privacy');
@@ -249,7 +296,9 @@ function render(){
   else if(state.view==='lobby')html=lobby();
   else if(state.view==='profile')html=profile();
   else html=home();
-  $('#app').innerHTML=html;$('#account').textContent=state.user?state.user.name:'Anmeldung';
+  $('#app').innerHTML=html;
+  if(state.view==='profile'&&!state.private){const input=$('#recovery-key');if(input)input.value=state.keyInput;const generated=$('#generated-key');if(generated)generated.value=state.recovery;}
+  else clearKeyInput();$('#account').textContent=state.user?state.user.name:'Anmeldung';
   $('#strip').innerHTML=state.view==='lobby'&&state.session.membership==='accepted'?`<span class="strip-label">LOBBY</span>${state.session.hardware.map(h=>`<span class="strip-device">${esc(h.id)} · ${h.online?'online':'offline'}</span>`).join('')}`:'';
   const items=[['home','⌂','Start'],...(state.session?[['back','◉','Lobby']]:[]),['profile','◯','Konto'],['privacy','ⓘ','Datenschutz']];
   $('#nav').innerHTML=items.map(([a,i,label])=>`<button type="button" data-action="${a}"><span class="nav-ico">${i}</span>${label}</button>`).join('');
@@ -257,7 +306,13 @@ function render(){
 async function refresh(){state.sessions=await api('/sessions');if(state.view==='lobby'&&state.session)return enterSession(state.session.id);render();}
 async function action(a){
   if(a==='login'||a==='register'){state.auth=a;render();return;}
-  if(a==='logout'){globalThis.BierPeterQR?.close();await api('/logout',{});lockVault();state.user=null;state.session=null;state.view='home';render();return;}
+  if(a==='logout'){globalThis.BierPeterQR?.close();await api('/logout',{});lockVault();state.user=null;state.session=null;state.sessions=[];resetSocial();state.view='home';render();return;}
+  if(a==='delete-account'){if(!confirm('Konto endgültig löschen? Alle eigenen Sessions, privaten Daten, Gerätezuordnungen, Freundschaften und offenen Anfragen werden gelöscht. Diese Aktion kann nicht rückgängig gemacht werden.'))return;await api('/account/delete',{confirm:true});globalThis.BierPeterQR?.close();lockVault();resetSocial();state.user=null;state.session=null;state.sessions=[];state.managed=[];state.device='';state.view='home';history.replaceState(null,'',location.pathname);render();notice('Konto und eigene Sessions wurden gelöscht.');return;}
+  if(a==='contacts-refresh'){await loadSocial();render();return;}
+  if(a.startsWith('friend:')){const [,act,user]=a.split(':');if(['remove','block'].includes(act)&&!confirm(act==='block'?'Kontakt blockieren? Freundschaft und direkte Einladungen werden beendet.':'Freundschaft beenden?'))return;await api('/social/friend',{action:act,user});await loadSocial();render();return;}
+  if(a.startsWith('invitation:')){const [,act,invite]=a.split(':');const result=await api('/social/invitation',{action:act,invite});await loadSocial();if(result.id)await enterSession(result.id);else render();return;}
+  if(a.startsWith('key-toggle:')){const kind=a.split(':')[1];if(kind==='unlock')state.keyInput=$('#recovery-key')?.value||state.keyInput;state.keyVisible[kind]=!state.keyVisible[kind];render();return;}
+  if(a.startsWith('key-copy:')){await copyKey(a.split(':')[1]);return;}
   if(a==='resume'){await resume();return;}
   if(a==='refresh'){await refresh();return;}
   if(a==='retry'){await api('/sessions/'+state.session.id+'/rejoin',{});await enterSession(state.session.id);return;}
@@ -270,9 +325,9 @@ async function action(a){
   if(a==='pair'){await api('/sessions/'+state.session.id+'/pair',{first:state.session.devices[0],second:state.session.devices[1]});await refresh();notice('Pairing-Befehle warten auf Abruf durch die Geräte.');return;}
   if(a.startsWith('session:')){await enterSession(a.slice(8));return;}
   if(/^(accept|reject|remove):/.test(a)){const [act,user]=a.split(':');if(act==='remove'&&!confirm('Teilnehmer entfernen?'))return;await api('/sessions/'+state.session.id+'/member',{user,status:{accept:'accepted',reject:'rejected',remove:'removed'}[act]});await refresh();return;}
-  if(a==='profile'){state.managed=await api('/account/devices');state.view='profile';render();return;}
+  if(a==='profile'){[state.managed,state.sessions]=await Promise.all([api('/account/devices'),api('/sessions')]);await loadSocial();state.view='profile';render();return;}
   if(a==='vault-lock'){lockVault();render();return;}
-  if(a==='vault-create'){state.recovery=BierPeterVault.createRecovery();render();return;}
+  if(a==='vault-create'){if((await api('/account/vault')).envelope)throw new Error('Der private Bereich besteht bereits. Die vorhandene Schlüsseldatei laden.');state.keyVisible.generated=false;state.recovery=BierPeterVault.createRecovery();render();return;}
   if(a==='vault-download'){downloadRecovery();return;}
   if(a==='vault-confirm'){if(!state.recovery)throw new Error('Zuerst Wiederherstellungsschlüssel erzeugen.');const stored=await api('/account/vault');if(stored.envelope)throw new Error('Private Daten existieren bereits. Vorhandenen Schlüssel verwenden.');state.vaultKey=await BierPeterVault.importRecovery(state.recovery);state.vaultRevision=stored.revision;try{await savePrivate(defaultPrivate());await ensureIdentity();state.recovery='';}catch(error){lockVault();throw error;}render();return;}
   if(a==='dashboard-edit'){if(!state.private)throw new Error('Zuerst private Daten entsperren.');state.dashboardEdit=!state.dashboardEdit;render();return;}
@@ -282,18 +337,18 @@ async function action(a){
   if(a==='delete-race'){if(!confirm('Diesen Vorbereitungsentwurf und seine Aufstellung löschen?'))return;await api('/sessions/'+state.session.id+'/race-delete',{race:activeRace().id});await refresh();return;}
   if(a.startsWith('device-remove:')){const id=a.slice(14);if(!confirm('Gerät und seine Aufstellungen aus dieser Session entfernen? Die Kontoverwaltung bleibt erhalten.'))return;await api('/sessions/'+state.session.id+'/device-remove',{device:id});await refresh();return;}
   if(a.startsWith('device-up:')||a.startsWith('device-down:')){const [dir,id]=a.split(':'),order=[...state.session.devices],i=order.indexOf(id),j=i+(dir==='device-up'?-1:1);if(i<0||j<0||j>=order.length)return;[order[i],order[j]]=[order[j],order[i]];await api('/sessions/'+state.session.id+'/device-order',{devices:order});await refresh();return;}
-  if(a==='home'){state.view=state.device?'device-entry':'home';if(!state.device)history.replaceState(null,'',location.pathname);state.sessions=await api('/sessions');}
+  if(a==='home'){state.view=state.device?'device-entry':'home';if(!state.device)history.replaceState(null,'',location.pathname);state.sessions=await api('/sessions');await loadSocial();}
   else if(a==='back'){if(state.session){await enterSession(state.session.id);return;}state.view='home';}
   else state.view=a;
   render();
 }
 async function failure(error){
-  if(error.status===401){lockVault();state.user=null;render();notice('Erneute Anmeldung erforderlich. Der Einstieg bleibt erhalten.');}
+  if(error.status===401){lockVault();state.user=null;state.session=null;resetSocial();render();notice('Erneute Anmeldung erforderlich. Der Einstieg bleibt erhalten.');}
   else notice(error.message||'Verbindung fehlgeschlagen');
 }
 document.addEventListener('click',async e=>{const b=e.target.closest('[data-action]');if(!b)return;b.disabled=true;state.busy=true;try{await action(b.dataset.action);}catch(error){await failure(error);}finally{state.busy=false;b.disabled=false;}});
 document.addEventListener('submit',async e=>{
-  const f=e.target.closest('[data-form]');if(!f)return;e.preventDefault();const b=f.querySelector('button');b.disabled=true;state.busy=true;
+  const f=e.target.closest('[data-form]');if(!f)return;e.preventDefault();if(state.busy)return;const b=f.querySelector('button:not([type]),button[type="submit"]');b.disabled=true;state.busy=true;
   try{
     const d=Object.fromEntries(new FormData(f));
     switch(f.dataset.form){
@@ -303,6 +358,7 @@ document.addEventListener('submit',async e=>{
       case 'vault-unlock':await unlockPrivate(d.recovery);break;
       case 'managed-add':await api('/account/devices',{device:deviceInput(d.device)});state.managed=await api('/account/devices');render();break;
       case 'managed-name':{if(!state.managed.some(x=>x.id===d.device))throw new Error('Gerät zuerst im Konto merken.');if(!state.private)throw new Error('Zuerst private Daten entsperren.');const next=structuredClone(state.private);next.aliases[d.device]=d.name.trim();await savePrivate(next);await publishAllNames();render();break;}
+      case 'friend-invite':await api('/sessions/'+state.session.id+'/invite',{user:d.user});notice('Einladung gesendet. Der Beitritt benötigt weiterhin die Host-Freigabe.');break;
       case 'public-url':await api('/sessions/'+state.session.id+'/settings',d);await refresh();break;
       case 'race-edit':{const id=d.race||f.dataset.race||activeRace().id;const race=state.session.races.find(r=>r.id===id);if(!race)throw new Error('Der bearbeitete Entwurf wurde gelöscht.');if(d.mode!==race.mode&&race.slots.length&&!confirm('Moduswechsel setzt diese Aufstellung zurück. Fortfahren?'))return;await api('/sessions/'+state.session.id+'/race-edit',{...d,race:id});await refresh();break;}
       case 'race':await api('/sessions/'+state.session.id+'/race',d);state.race=null;await refresh();$('#lineup')?.scrollIntoView({behavior:'smooth'});break;
@@ -317,15 +373,18 @@ document.addEventListener('submit',async e=>{
 });
 document.addEventListener('change',async e=>{
   if(e.target.dataset?.scanImage){try{await acceptScan(await BierPeterQR.image(e.target.files?.[0]),e.target.dataset.scanImage);}catch(error){await failure(error);}finally{e.target.value='';}return;}
-  if(e.target.id==='vault-key-file'){try{const file=e.target.files?.[0];if(!file)return;const recovery=JSON.parse(await file.text());if(recovery.format!=='bierpeter-private-key'||recovery.account!==state.user.id)throw new Error('Schlüsseldatei gehört nicht zu diesem Konto.');await unlockPrivate(recovery.key);}catch(error){await failure(error);}return;}
+  if(e.target.id==='vault-key-file'){try{const file=e.target.files?.[0];if(!file)return;if(file.size>16384)throw new Error('Ungültige Schlüsseldatei.');const recovery=JSON.parse(await file.text());if(recovery.format!=='bierpeter-private-key'||recovery.account!==state.user.id||typeof recovery.key!=='string'||!/^[a-f0-9]{64}$/i.test(recovery.key))throw new Error('Schlüsseldatei oder Konto prüfen.');state.keyInput=recovery.key;state.keyVisible.unlock=false;render();notice('Schlüssel geladen. Anzeigen, kopieren oder ausdrücklich entsperren.');}catch(error){await failure(error);}finally{e.target.value='';}return;}
+  if(e.target.id==='invite-policy'){state.busy=true;try{await api('/sessions/'+state.session.id+'/invite-policy',{allow:e.target.checked});await refresh();}catch(error){await failure(error);}finally{state.busy=false;}return;}
   if(e.target.id==='race-choice'){state.busy=true;try{await api('/sessions/'+state.session.id+'/active-race',{race:e.target.value});await refresh();}catch(error){await failure(error);}finally{state.busy=false;}return;}
   if(e.target.dataset?.widget){try{const next=structuredClone(state.private);next.widgets.find(w=>w.id===e.target.dataset.widget).visible=e.target.checked;await savePrivate(next);render();}catch(error){await failure(error);}return;}
   const select=e.target.closest('select[data-device]');if(!select)return;select.disabled=true;state.busy=true;
   try{await api('/slot',{race:select.dataset.race||activeRace().id,device:select.dataset.device,side:Number(select.dataset.side),user:select.value||null});await refresh();}catch(error){await failure(error);await refresh();}finally{state.busy=false;}
 });
+document.addEventListener('input',e=>{if(e.target.id==='recovery-key')state.keyInput=e.target.value;});
 window.addEventListener('hashchange',()=>{if(location.hash==='#imprint'){state.view='imprint';render();}});
 window.addEventListener('popstate',()=>{if(state.user)resume().catch(failure);});
 async function poll(){
+  if(!state.busy&&!state.polling&&state.user&&['home','profile'].includes(state.view)&&!document.hidden){if(document.activeElement?.matches('input,select,textarea')||state.keyInput||state.recovery)return;state.polling=true;const user=state.user.id,view=state.view;try{const before=JSON.stringify(state.social),next=await api('/social');if(state.user?.id===user&&state.view===view&&!state.busy){state.social=next;if(JSON.stringify(next)!==before)render();}}catch(error){await failure(error);}finally{state.polling=false;}return;}
   if(state.busy||state.polling||!state.user||state.view!=='lobby'||!state.session||document.hidden)return;
   if(document.activeElement?.matches('input,select,textarea'))return;
   const drafts=[...document.querySelectorAll('form[data-form]')].map(f=>({kind:f.dataset.form,race:f.dataset.race||'',values:[...new FormData(f)]}));

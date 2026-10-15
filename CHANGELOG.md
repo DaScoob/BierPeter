@@ -1,5 +1,16 @@
 # Änderungen
 
+## 0.3.0-alpha · 2026-10-15
+
+- Konto löschen mit Warnung und Bestätigung, ohne erneute Passwortabfrage; eigene Sessions werden gelöscht, keine Host-Übergabe.
+- Bekannte Spieler aus bestehenden gemeinsamen Sessions, Freundschaftsanfragen, Annahme/Ablehnung, Zurückziehen und Beenden.
+- Blockieren/Aufheben und Schutz vor wiederholten Anfragen.
+- Direkte Freundeseinladungen, Host-Erlaubnis für Teilnehmer und weiterhin getrennte Beitrittsfreigabe. Keine zusätzlichen Statistik-/Geräterechte.
+- Schlüsselanzeigen und Kopieren bei Erzeugung, Eingabe und Dateiimport; Entsperren erst nach ausdrücklicher Aktion, Zwischenablage-Fallback und Leeren des Eingabefeldes.
+- Live-Datenlöschung einschließlich anderer Login-Sitzungen und Kontaktverknüpfungen atomar; fremde Sessions behalten Geräte ohne gelöschte Anbieterzuordnung.
+- Kontaktmetadaten bleiben im aktuellen Servermodell lesbar; vollständige E2EE wird nicht behauptet.
+
+
 ## 0.2.2-alpha · 2026-10-15
 
 - Standard-QR für Einladungen; lokaler Kamera-/Foto-Scan für Geräte.

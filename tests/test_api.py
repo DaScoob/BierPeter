@@ -5,10 +5,12 @@ import json
 import tempfile
 import threading
 import unittest
+import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
 from http.server import ThreadingHTTPServer
+sys.path.insert(0,str(Path(__file__).parents[1]))
 spec=importlib.util.spec_from_file_location('app',Path(__file__).parents[1]/'server.py')
 app=importlib.util.module_from_spec(spec)
 spec.loader.exec_module(app)
